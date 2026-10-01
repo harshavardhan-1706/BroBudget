@@ -2,12 +2,17 @@
  * ============================================================================
  * BroBudget - Analytics, Savings Goals & Monthly Reports Module
  * Developer 3 (Analytics, Charts, Insights, Savings Goals, Reports)
- * 
- * GitHub Team Architecture Guidelines:
- * - Function prefixes: `bbAnalytics*`, `bbSavings*`, `bbReports*`
- * - Dual Chart Engine: Chart.js CDN with pure HTML5 Canvas fallback (100% offline-ready)
- * - Reads shared LocalStorage: `brobudget_transactions_v1` and `savingsGoals`
- * - Public API exported at `window.BBAnalytics`
+ *
+ * FIXED VERSION
+ *
+ * Main data flow:
+ * transactions.js
+ *      ↓
+ * brobudget_transactions_v1
+ *      ↓
+ * analytics.js
+ *
+ * Analytics no longer adds transaction totals on top of dashboard totals.
  * ============================================================================
  */
 
@@ -17,6 +22,7 @@
   // --------------------------------------------------------------------------
   // 1. Constants & Configuration
   // --------------------------------------------------------------------------
+
   const BB_TRANSACTIONS_KEY = 'brobudget_transactions_v1';
   const BB_SAVINGS_GOALS_KEY = 'savingsGoals';
   const BB_DASHBOARD_KEY = 'brobudget_financial_data_v1';
@@ -41,58 +47,240 @@
   // --------------------------------------------------------------------------
   // 2. Application State
   // --------------------------------------------------------------------------
+
   let bbAnalyticsState = {
     transactions: [],
-    monthlySummary: {}, // { '2026-0': { income, expenses, savings, categories: {}, count } }
+    monthlySummary: {},
     savingsGoals: [],
-    activeReportMonthKey: '2026-9', // Default to October
+    activeReportMonthKey: '2026-9',
     historySortColumn: 'month',
     historySortAsc: false,
+
     chartInstances: {
       categoryDoughnut: null,
       incomeExpenseBar: null,
       savingsLine: null
-    }
+    },
+
+    initialized: false,
+    eventsBound: false,
+    resizeBound: false
   };
 
+  let bbActiveDepositGoalId = null;
+
   // --------------------------------------------------------------------------
-  // 3. LocalStorage & Seed Data Handlers
+  // 3. Utility Helpers
   // --------------------------------------------------------------------------
+
+  function bbAnalyticsEscapeHtml(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
+
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   /**
-   * Retrieves transactions from shared storage or Developer 1's store
+   * Converts all transaction/dashboard category naming variants
+   * into the analytics category model.
+   *
+   * Dashboard:
+   *   housing
+   *   utilities
+   *
+   * Transactions:
+   *   Rent
+   *   Bills
+   *
+   * Analytics:
+   *   rent
+   *   bills
+   */
+  function bbAnalyticsNormalizeCategory(category) {
+    const value = String(category || 'other')
+      .trim()
+      .toLowerCase();
+
+    const categoryMap = {
+      food: 'food',
+
+      rent: 'rent',
+      housing: 'rent',
+
+      transport: 'transport',
+      transportation: 'transport',
+
+      shopping: 'shopping',
+
+      education: 'education',
+
+      entertainment: 'entertainment',
+
+      health: 'health',
+      medical: 'health',
+
+      bills: 'bills',
+      bill: 'bills',
+      utilities: 'bills',
+      utility: 'bills',
+
+      other: 'other'
+    };
+
+    return categoryMap[value] || 'other';
+  }
+
+  /**
+   * Safely parses YYYY-MM-DD without timezone conversion.
+   *
+   * new Date('2026-10-01') can behave differently depending on timezone.
+   * String parsing avoids that problem.
+   */
+  function bbAnalyticsParseDate(dateValue) {
+    const dateText = String(dateValue || '').trim();
+
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText);
+
+    if (!match) {
+      return null;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+
+    if (
+      !Number.isInteger(year) ||
+      !Number.isInteger(month) ||
+      !Number.isInteger(day) ||
+      month < 1 ||
+      month > 12 ||
+      day < 1 ||
+      day > 31
+    ) {
+      return null;
+    }
+
+    return {
+      year,
+      monthIndex: month - 1,
+      day
+    };
+  }
+
+  function bbAnalyticsGetMonthKey(dateValue) {
+    const parsed = bbAnalyticsParseDate(dateValue);
+
+    if (!parsed) {
+      return null;
+    }
+
+    return `${parsed.year}-${parsed.monthIndex}`;
+  }
+
+  function bbAnalyticsCreateEmptyMonth() {
+    return {
+      income: 0,
+      expenses: 0,
+      savings: 0,
+      savingsPercentage: 0,
+      categories: {},
+      transactionsCount: 0
+    };
+  }
+
+  function bbAnalyticsRecalculateMonth(record) {
+    record.income = Number.isFinite(Number(record.income))
+      ? Number(record.income)
+      : 0;
+
+    record.expenses = Number.isFinite(Number(record.expenses))
+      ? Number(record.expenses)
+      : 0;
+
+    record.savings = record.income - record.expenses;
+
+    record.savingsPercentage =
+      record.income > 0
+        ? Number(((record.savings / record.income) * 100).toFixed(1))
+        : 0;
+
+    if (!Number.isFinite(record.savingsPercentage)) {
+      record.savingsPercentage = 0;
+    }
+
+    record.transactionsCount =
+      Number.isFinite(Number(record.transactionsCount))
+        ? Number(record.transactionsCount)
+        : 0;
+
+    return record;
+  }
+
+  // --------------------------------------------------------------------------
+  // 4. LocalStorage - Transactions
+  // --------------------------------------------------------------------------
+
+  /**
+   * Reads the shared transaction store.
+   *
+   * IMPORTANT:
+   * An empty [] is a valid stored state.
+   * We do NOT replace it with demo transactions.
    */
   function bbAnalyticsGetTransactions() {
     try {
       const stored = localStorage.getItem(BB_TRANSACTIONS_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
+
+      if (stored === null) {
+        return [];
       }
-    } catch (e) {
-      console.warn('BroBudget Analytics: Unable to read transactions from LocalStorage.', e);
+
+      const parsed = JSON.parse(stored);
+
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+
+      return [];
+    } catch (error) {
+      console.warn(
+        'BroBudget Analytics: Unable to read transactions from LocalStorage.',
+        error
+      );
+
+      return [];
     }
-    return [];
   }
 
-  /**
-   * Retrieves savings goals from storage or loads initial demo goals
-   */
+  // --------------------------------------------------------------------------
+  // 5. LocalStorage - Savings Goals
+  // --------------------------------------------------------------------------
+
   function bbSavingsGetGoals() {
     try {
       const stored = localStorage.getItem(BB_SAVINGS_GOALS_KEY);
-      if (stored) {
+
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
+
         if (Array.isArray(parsed)) {
           return parsed;
         }
       }
-    } catch (e) {
-      console.warn('BroBudget Analytics: Unable to read savings goals.', e);
+    } catch (error) {
+      console.warn(
+        'BroBudget Analytics: Unable to read savings goals.',
+        error
+      );
     }
 
-    // Default Seed Goals
     const seedGoals = [
       {
         id: 1,
@@ -116,152 +304,353 @@
         targetDate: '2026-11-15'
       }
     ];
+
     bbSavingsSaveGoals(seedGoals);
+
     return seedGoals;
   }
 
-  /**
-   * Persists savings goals to LocalStorage
-   */
   function bbSavingsSaveGoals(goals) {
     try {
-      localStorage.setItem(BB_SAVINGS_GOALS_KEY, JSON.stringify(goals));
+      localStorage.setItem(
+        BB_SAVINGS_GOALS_KEY,
+        JSON.stringify(goals)
+      );
+
       bbAnalyticsState.savingsGoals = goals;
-    } catch (e) {
-      console.error('BroBudget Analytics: Failed to save savings goals.', e);
+    } catch (error) {
+      console.error(
+        'BroBudget Analytics: Failed to save savings goals.',
+        error
+      );
     }
   }
 
   // --------------------------------------------------------------------------
-  // 4. Monthly Aggregation Engine
+  // 6. Monthly Aggregation Engine
   // --------------------------------------------------------------------------
+
   /**
-   * Builds an aggregated multi-month dataset from transactions and dashboard records.
-   * Handles empty storage, missing categories, and guarantees zero NaN values.
+   * IMPORTANT ARCHITECTURE FIX
+   *
+   * If transaction storage exists:
+   *
+   *     transactions → analytics
+   *
+   * Dashboard data is NOT added to transactions.
+   *
+   * This prevents:
+   *
+   *     dashboard totals + transaction totals
+   *
+   * from being counted twice.
+   *
+   * If transactions storage does not exist at all, dashboard data is used
+   * only as a demo fallback.
    */
   function bbAnalyticsBuildMonthlySummary() {
     const summary = {};
 
-    // 1. Seed months from Developer 1's dashboard store if available
+    let transactionStorageExists = false;
+
     try {
-      const storedDash = localStorage.getItem(BB_DASHBOARD_KEY);
-      if (storedDash) {
-        const dashData = JSON.parse(storedDash);
-        if (dashData && dashData.months) {
-          Object.keys(dashData.months).forEach(key => {
-            const m = dashData.months[key];
-            const inc = Number(m.income) || 0;
-            const exp = Number(m.expenses) || 0;
-            summary[key] = {
-              income: inc,
-              expenses: exp,
-              savings: inc - exp,
-              savingsPercentage: inc > 0 ? Number(((inc - exp) / inc * 100).toFixed(1)) : 0,
-              categories: { ...(m.categories || {}) },
-              transactionsCount: m.transactionsCount || 10
-            };
+      transactionStorageExists =
+        localStorage.getItem(BB_TRANSACTIONS_KEY) !== null;
+    } catch (error) {
+      transactionStorageExists = false;
+    }
+
+    // ------------------------------------------------------------------------
+    // SOURCE OF TRUTH: Transactions
+    // ------------------------------------------------------------------------
+
+    if (transactionStorageExists) {
+      const txList = Array.isArray(bbAnalyticsState.transactions)
+        ? bbAnalyticsState.transactions
+        : [];
+
+      txList.forEach(transaction => {
+        if (!transaction || !transaction.date) {
+          return;
+        }
+
+        const monthKey = bbAnalyticsGetMonthKey(transaction.date);
+
+        if (!monthKey) {
+          return;
+        }
+
+        if (!summary[monthKey]) {
+          summary[monthKey] = bbAnalyticsCreateEmptyMonth();
+        }
+
+        const amount = Number(transaction.amount);
+
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return;
+        }
+
+        summary[monthKey].transactionsCount += 1;
+
+        const type = String(transaction.type || '')
+          .trim()
+          .toLowerCase();
+
+        if (type === 'income') {
+          summary[monthKey].income += amount;
+        } else if (type === 'expense') {
+          summary[monthKey].expenses += amount;
+
+          const category =
+            bbAnalyticsNormalizeCategory(transaction.category);
+
+          summary[monthKey].categories[category] =
+            (summary[monthKey].categories[category] || 0) + amount;
+        }
+      });
+
+      Object.keys(summary).forEach(key => {
+        bbAnalyticsRecalculateMonth(summary[key]);
+      });
+
+      bbAnalyticsState.monthlySummary = summary;
+
+      // If there is no transaction data, clear the selected report month
+      // rather than showing fake dashboard values.
+      const keys = Object.keys(summary).sort();
+
+      if (
+        keys.length > 0 &&
+        !summary[bbAnalyticsState.activeReportMonthKey]
+      ) {
+        bbAnalyticsState.activeReportMonthKey =
+          keys[keys.length - 1];
+      }
+
+      return summary;
+    }
+
+    // ------------------------------------------------------------------------
+    // DEMO FALLBACK
+    // ------------------------------------------------------------------------
+    //
+    // Used only when transactions.js has never created its LocalStorage key.
+    // This keeps a fresh Analytics page populated.
+    // ------------------------------------------------------------------------
+
+    try {
+      const storedDashboard =
+        localStorage.getItem(BB_DASHBOARD_KEY);
+
+      if (storedDashboard) {
+        const dashboardData = JSON.parse(storedDashboard);
+
+        if (
+          dashboardData &&
+          dashboardData.months &&
+          typeof dashboardData.months === 'object'
+        ) {
+          Object.keys(dashboardData.months).forEach(key => {
+            const month = dashboardData.months[key];
+
+            if (!month) {
+              return;
+            }
+
+            const record = bbAnalyticsCreateEmptyMonth();
+
+            record.income = Number(month.income) || 0;
+            record.expenses = Number(month.expenses) || 0;
+
+            if (
+              month.categories &&
+              typeof month.categories === 'object'
+            ) {
+              Object.keys(month.categories).forEach(category => {
+                const canonicalCategory =
+                  bbAnalyticsNormalizeCategory(category);
+
+                const amount =
+                  Number(month.categories[category]) || 0;
+
+                if (amount > 0) {
+                  record.categories[canonicalCategory] =
+                    (record.categories[canonicalCategory] || 0) +
+                    amount;
+                }
+              });
+            }
+
+            /*
+             * Do not trust dashboard transaction counts as exact
+             * transaction counts.
+             *
+             * Demo fallback gets zero unless dashboard has a real
+             * numeric count.
+             */
+            record.transactionsCount =
+              Number(month.transactionsCount) || 0;
+
+            bbAnalyticsRecalculateMonth(record);
+
+            summary[key] = record;
           });
         }
       }
-    } catch (e) {
-      console.warn('Dashboard data aggregation fallback.', e);
+    } catch (error) {
+      console.warn(
+        'BroBudget Analytics: Dashboard fallback unavailable.',
+        error
+      );
     }
 
-    // Default multi-month baseline if dashboard store was empty
+    // ------------------------------------------------------------------------
+    // If dashboard is also unavailable, use demo months.
+    // ------------------------------------------------------------------------
+
     if (Object.keys(summary).length === 0) {
       const defaultMonths = {
-        '2026-6': { income: 52000, expenses: 33000, categories: { rent: 12000, food: 9000, transport: 4000, utilities: 4000, entertainment: 4000 } },
-        '2026-7': { income: 54000, expenses: 32000, categories: { rent: 12000, food: 9000, transport: 4000, utilities: 3500, entertainment: 3500 } },
-        '2026-8': { income: 54000, expenses: 31000, categories: { rent: 12000, food: 8500, transport: 3800, utilities: 3200, entertainment: 3500 } },
-        '2026-9': { income: 50000, expenses: 30000, categories: { rent: 12000, food: 8000, transport: 3500, utilities: 3500, entertainment: 3000 } },
-        '2026-10': { income: 55000, expenses: 33000, categories: { rent: 12000, food: 9000, transport: 4000, utilities: 4000, entertainment: 4000 } },
-        '2026-11': { income: 60000, expenses: 38000, categories: { rent: 12000, food: 11000, transport: 5000, utilities: 4500, entertainment: 5500 } }
+        '2026-6': {
+          income: 52000,
+          expenses: 33000,
+          categories: {
+            rent: 12000,
+            food: 9000,
+            transport: 4000,
+            bills: 4000,
+            entertainment: 4000
+          }
+        },
+
+        '2026-7': {
+          income: 54000,
+          expenses: 32000,
+          categories: {
+            rent: 12000,
+            food: 9000,
+            transport: 4000,
+            bills: 3500,
+            entertainment: 3500
+          }
+        },
+
+        '2026-8': {
+          income: 54000,
+          expenses: 31000,
+          categories: {
+            rent: 12000,
+            food: 8500,
+            transport: 3800,
+            bills: 3200,
+            entertainment: 3500
+          }
+        },
+
+        '2026-9': {
+          income: 50000,
+          expenses: 30000,
+          categories: {
+            rent: 12000,
+            food: 8000,
+            transport: 3500,
+            bills: 3500,
+            entertainment: 3000
+          }
+        },
+
+        '2026-10': {
+          income: 55000,
+          expenses: 33000,
+          categories: {
+            rent: 12000,
+            food: 9000,
+            transport: 4000,
+            bills: 4000,
+            entertainment: 4000
+          }
+        },
+
+        '2026-11': {
+          income: 60000,
+          expenses: 38000,
+          categories: {
+            rent: 12000,
+            food: 11000,
+            transport: 5000,
+            bills: 4500,
+            entertainment: 5500
+          }
+        }
       };
 
       Object.keys(defaultMonths).forEach(key => {
-        const m = defaultMonths[key];
-        const inc = m.income;
-        const exp = m.expenses;
-        summary[key] = {
-          income: inc,
-          expenses: exp,
-          savings: inc - exp,
-          savingsPercentage: Number(((inc - exp) / inc * 100).toFixed(1)),
-          categories: { ...m.categories },
-          transactionsCount: 14
+        const source = defaultMonths[key];
+
+        const record = bbAnalyticsCreateEmptyMonth();
+
+        record.income = source.income;
+        record.expenses = source.expenses;
+        record.categories = {
+          ...source.categories
         };
+
+        record.transactionsCount = 0;
+
+        bbAnalyticsRecalculateMonth(record);
+
+        summary[key] = record;
       });
     }
-
-    // 2. Aggregate granular transactions from Developer 2
-    const txList = bbAnalyticsState.transactions;
-    if (txList.length > 0) {
-      txList.forEach(t => {
-        if (!t.date) return;
-        const d = new Date(t.date);
-        const y = d.getFullYear();
-        const m = d.getMonth();
-        const key = `${y}-${m}`;
-
-        if (!summary[key]) {
-          summary[key] = {
-            income: 0,
-            expenses: 0,
-            savings: 0,
-            savingsPercentage: 0,
-            categories: {},
-            transactionsCount: 0
-          };
-        }
-
-        const amt = Number(t.amount) || 0;
-        summary[key].transactionsCount++;
-
-        if (t.type === 'income') {
-          summary[key].income += amt;
-        } else {
-          summary[key].expenses += amt;
-          const cat = (t.category || 'other').toLowerCase();
-          summary[key].categories[cat] = (summary[key].categories[cat] || 0) + amt;
-        }
-      });
-    }
-
-    // 3. Recalculate savings and percentages safely for all months
-    Object.keys(summary).forEach(k => {
-      const inc = summary[k].income;
-      const exp = summary[k].expenses;
-      summary[k].savings = inc - exp;
-      summary[k].savingsPercentage = inc > 0 ? Number(((inc - exp) / inc * 100).toFixed(1)) : 0;
-      if (!isFinite(summary[k].savingsPercentage)) summary[k].savingsPercentage = 0;
-    });
 
     bbAnalyticsState.monthlySummary = summary;
+
+    const keys = Object.keys(summary).sort();
+
+    if (
+      keys.length > 0 &&
+      !summary[bbAnalyticsState.activeReportMonthKey]
+    ) {
+      bbAnalyticsState.activeReportMonthKey =
+        keys[keys.length - 1];
+    }
+
     return summary;
   }
 
   // --------------------------------------------------------------------------
-  // 5. Formatting Utilities & Safe Math
+  // 7. Formatting Utilities
   // --------------------------------------------------------------------------
+
   function bbAnalyticsFormatCurrency(amount) {
-    if (typeof amount !== 'number' || isNaN(amount) || !isFinite(amount)) {
+    const numericAmount = Number(amount);
+
+    if (!Number.isFinite(numericAmount)) {
       return '₹0';
     }
-    const isNegative = amount < 0;
-    const absVal = Math.abs(Math.round(amount));
-    return (isNegative ? '-₹' : '₹') + absVal.toLocaleString('en-IN');
+
+    const isNegative = numericAmount < 0;
+    const absoluteValue = Math.abs(Math.round(numericAmount));
+
+    return (
+      (isNegative ? '-₹' : '₹') +
+      absoluteValue.toLocaleString('en-IN')
+    );
   }
 
   function bbAnalyticsFormatPercentage(pct) {
-    if (typeof pct !== 'number' || isNaN(pct) || !isFinite(pct)) {
+    const numericPct = Number(pct);
+
+    if (!Number.isFinite(numericPct)) {
       return '0.0%';
     }
-    return `${pct.toFixed(1)}%`;
+
+    return `${numericPct.toFixed(1)}%`;
   }
 
   // --------------------------------------------------------------------------
-  // 6. Analytics KPI Overview Render
+  // 8. KPI Overview
   // --------------------------------------------------------------------------
+
   function bbAnalyticsRenderKPIs() {
     const summary = bbAnalyticsState.monthlySummary;
     const keys = Object.keys(summary).sort();
@@ -270,167 +659,257 @@
     let totalExpenses = 0;
     let totalSavings = 0;
 
-    keys.forEach(k => {
-      totalIncome += summary[k].income;
-      totalExpenses += summary[k].expenses;
-      totalSavings += summary[k].savings;
+    keys.forEach(key => {
+      const record = summary[key];
+
+      totalIncome += Number(record.income) || 0;
+      totalExpenses += Number(record.expenses) || 0;
+      totalSavings += Number(record.savings) || 0;
     });
 
-    const avgSavingsRate = totalIncome > 0 ? (totalSavings / totalIncome) * 100 : 0;
+    const averageSavingsRate =
+      totalIncome > 0
+        ? (totalSavings / totalIncome) * 100
+        : 0;
 
-    const elInc = document.getElementById('bb-kpi-total-income');
-    const elExp = document.getElementById('bb-kpi-total-expenses');
-    const elSav = document.getElementById('bb-kpi-total-savings');
-    const elRate = document.getElementById('bb-kpi-savings-rate');
+    const incomeElement =
+      document.getElementById('bb-kpi-total-income');
 
-    if (elInc) elInc.textContent = bbAnalyticsFormatCurrency(totalIncome);
-    if (elExp) elExp.textContent = bbAnalyticsFormatCurrency(totalExpenses);
-    if (elSav) {
-      elSav.textContent = bbAnalyticsFormatCurrency(totalSavings);
-      elSav.style.color = totalSavings < 0 ? 'var(--bb-color-expense-light)' : '#ffffff';
+    const expenseElement =
+      document.getElementById('bb-kpi-total-expenses');
+
+    const savingsElement =
+      document.getElementById('bb-kpi-total-savings');
+
+    const rateElement =
+      document.getElementById('bb-kpi-savings-rate');
+
+    if (incomeElement) {
+      incomeElement.textContent =
+        bbAnalyticsFormatCurrency(totalIncome);
     }
-    if (elRate) elRate.textContent = bbAnalyticsFormatPercentage(avgSavingsRate);
+
+    if (expenseElement) {
+      expenseElement.textContent =
+        bbAnalyticsFormatCurrency(totalExpenses);
+    }
+
+    if (savingsElement) {
+      savingsElement.textContent =
+        bbAnalyticsFormatCurrency(totalSavings);
+
+      savingsElement.style.color =
+        totalSavings < 0
+          ? 'var(--bb-color-expense-light)'
+          : '#ffffff';
+    }
+
+    if (rateElement) {
+      rateElement.textContent =
+        bbAnalyticsFormatPercentage(averageSavingsRate);
+    }
   }
 
   // --------------------------------------------------------------------------
-  // 7. Automated Financial Insights Engine
+  // 9. Financial Insights
   // --------------------------------------------------------------------------
-  /**
-   * Generates actionable financial insights based on real user figures.
-   * Prevents misleading statements when there is insufficient data.
-   */
+
   function bbAnalyticsGenerateInsights() {
-    const container = document.getElementById('bb-insights-grid');
-    if (!container) return;
+    const container =
+      document.getElementById('bb-insights-grid');
+
+    if (!container) {
+      return;
+    }
 
     const summary = bbAnalyticsState.monthlySummary;
     const keys = Object.keys(summary).sort();
 
     if (keys.length === 0) {
       container.innerHTML = `
-        <div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: var(--bb-text-muted);">
+        <div style="grid-column:1/-1;padding:20px;text-align:center;color:var(--bb-text-muted);">
           No transaction history available yet. Record income and expenses to unlock automated financial insights.
         </div>
       `;
+
       return;
     }
 
-    const currentKey = bbAnalyticsState.activeReportMonthKey || keys[keys.length - 1];
-    const currentMonth = summary[currentKey] || { income: 0, expenses: 0, savings: 0, categories: {} };
+    let currentKey =
+      bbAnalyticsState.activeReportMonthKey;
 
-    // Previous month detection
-    const currentIdx = keys.indexOf(currentKey);
-    const prevKey = currentIdx > 0 ? keys[currentIdx - 1] : null;
-    const prevMonth = prevKey ? summary[prevKey] : null;
+    if (!summary[currentKey]) {
+      currentKey = keys[keys.length - 1];
+      bbAnalyticsState.activeReportMonthKey = currentKey;
+    }
+
+    const currentMonth =
+      summary[currentKey] || bbAnalyticsCreateEmptyMonth();
+
+    const currentIndex = keys.indexOf(currentKey);
+
+    const previousKey =
+      currentIndex > 0
+        ? keys[currentIndex - 1]
+        : null;
+
+    const previousMonth =
+      previousKey
+        ? summary[previousKey]
+        : null;
 
     const insights = [];
 
-    // 1. Savings Rate Insight
+    // Savings rate
     if (currentMonth.income > 0) {
       if (currentMonth.savingsPercentage >= 30) {
         insights.push({
           icon: '💎',
           tag: 'Savings Benchmark',
-          text: `You saved <strong>${bbAnalyticsFormatPercentage(currentMonth.savingsPercentage)}</strong> of your income this month (${bbAnalyticsFormatCurrency(currentMonth.savings)} retained). Outstanding capital accumulation.`
+          text:
+            `You saved <strong>${bbAnalyticsFormatPercentage(currentMonth.savingsPercentage)}</strong> of your income this month (${bbAnalyticsFormatCurrency(currentMonth.savings)} retained).`
         });
       } else if (currentMonth.savingsPercentage > 0) {
         insights.push({
           icon: '🎯',
           tag: 'Retention Rate',
-          text: `You saved <strong>${bbAnalyticsFormatPercentage(currentMonth.savingsPercentage)}</strong> of your earnings this month. Try trimming discretionary categories to push towards 25%.`
+          text:
+            `You saved <strong>${bbAnalyticsFormatPercentage(currentMonth.savingsPercentage)}</strong> of your earnings this month.`
         });
       } else {
         insights.push({
           icon: '⚠️',
           tag: 'Deficit Warning',
-          text: `Your expenditures exceeded your monthly income by <strong>${bbAnalyticsFormatCurrency(Math.abs(currentMonth.savings))}</strong>. Consider reviewing recurring bills.`
+          text:
+            `Your expenditures exceeded your monthly income by <strong>${bbAnalyticsFormatCurrency(Math.abs(currentMonth.savings))}</strong>.`
         });
       }
     } else {
       insights.push({
         icon: 'ℹ️',
         tag: 'Income Status',
-        text: `No income has been registered for this selected period (${bbAnalyticsFormatCurrency(currentMonth.expenses)} in recorded outflow).`
+        text:
+          `No income has been registered for this selected period (${bbAnalyticsFormatCurrency(currentMonth.expenses)} in recorded outflow).`
       });
     }
 
-    // 2. Highest Expense Category Insight
-    const categories = currentMonth.categories || {};
-    let highestCat = null;
-    let highestAmt = 0;
-    Object.keys(categories).forEach(c => {
-      if (categories[c] > highestAmt) {
-        highestAmt = categories[c];
-        highestCat = c;
+    // Highest expense category
+    const categories =
+      currentMonth.categories || {};
+
+    let highestCategory = null;
+    let highestAmount = 0;
+
+    Object.keys(categories).forEach(category => {
+      const amount = Number(categories[category]) || 0;
+
+      if (amount > highestAmount) {
+        highestAmount = amount;
+        highestCategory = category;
       }
     });
 
-    if (highestCat && highestAmt > 0) {
-      const catCapitalized = highestCat.charAt(0).toUpperCase() + highestCat.slice(1);
-      const catPct = currentMonth.expenses > 0 ? Math.round((highestAmt / currentMonth.expenses) * 100) : 0;
+    if (highestCategory && highestAmount > 0) {
+      const categoryName =
+        highestCategory.charAt(0).toUpperCase() +
+        highestCategory.slice(1);
+
+      const categoryPercentage =
+        currentMonth.expenses > 0
+          ? Math.round(
+              (highestAmount / currentMonth.expenses) * 100
+            )
+          : 0;
+
       insights.push({
-        icon: '🍔',
+        icon: '📊',
         tag: 'Top Expenditure',
-        text: `<strong>${catCapitalized}</strong> is your highest expense category at <strong>${bbAnalyticsFormatCurrency(highestAmt)}</strong> (${catPct}% of total monthly outflows).`
+        text:
+          `<strong>${bbAnalyticsEscapeHtml(categoryName)}</strong> is your highest expense category at <strong>${bbAnalyticsFormatCurrency(highestAmount)}</strong> (${categoryPercentage}% of total monthly outflows).`
       });
     } else {
       insights.push({
         icon: '📊',
         tag: 'Expense Breakdown',
-        text: `Categorized expenditures are balanced across multiple standard allocations with no extreme outliers.`
+        text:
+          'No categorized expenses are recorded for this period yet.'
       });
     }
 
-    // 3. Month-over-Month Comparison
-    if (prevMonth && prevMonth.income > 0 && currentMonth.income > 0) {
-      const savingsDelta = currentMonth.savings - prevMonth.savings;
-      const expenseDelta = currentMonth.expenses - prevMonth.expenses;
+    // Month-over-month comparison
+    if (
+      previousMonth &&
+      previousMonth.income > 0 &&
+      currentMonth.income > 0
+    ) {
+      const savingsDelta =
+        currentMonth.savings -
+        previousMonth.savings;
+
+      const expenseDelta =
+        currentMonth.expenses -
+        previousMonth.expenses;
 
       if (savingsDelta > 0) {
         insights.push({
           icon: '📈',
-          tag: 'Growth Trend',
-          text: `Your savings increased by <strong>${bbAnalyticsFormatCurrency(savingsDelta)}</strong> compared with last month. Upward wealth trajectory confirmed.`
+          tag: 'Savings Trend',
+          text:
+            `Savings increased by <strong>${bbAnalyticsFormatCurrency(savingsDelta)}</strong> compared with the previous recorded month.`
         });
       } else if (savingsDelta < 0) {
         insights.push({
           icon: '📉',
-          tag: 'Drawdown Trend',
-          text: `Your savings decreased by <strong>${bbAnalyticsFormatCurrency(Math.abs(savingsDelta))}</strong> compared with last month.`
+          tag: 'Savings Trend',
+          text:
+            `Savings decreased by <strong>${bbAnalyticsFormatCurrency(Math.abs(savingsDelta))}</strong> compared with the previous recorded month.`
+        });
+      } else {
+        insights.push({
+          icon: '➡️',
+          tag: 'Savings Trend',
+          text:
+            'Savings were unchanged compared with the previous recorded month.'
         });
       }
 
       if (expenseDelta > 0) {
         insights.push({
           icon: '💸',
-          tag: 'Spend Velocity',
-          text: `Your monthly expenses increased by <strong>${bbAnalyticsFormatCurrency(expenseDelta)}</strong> compared with last month.`
+          tag: 'Expense Trend',
+          text:
+            `Expenses increased by <strong>${bbAnalyticsFormatCurrency(expenseDelta)}</strong> compared with the previous recorded month.`
         });
       } else if (expenseDelta < 0) {
         insights.push({
           icon: '🛡️',
-          tag: 'Spend Discipline',
-          text: `Your expenditures decreased by <strong>${bbAnalyticsFormatCurrency(Math.abs(expenseDelta))}</strong> compared with last month. Great discipline.`
+          tag: 'Expense Trend',
+          text:
+            `Expenses decreased by <strong>${bbAnalyticsFormatCurrency(Math.abs(expenseDelta))}</strong> compared with the previous recorded month.`
         });
       }
     } else {
       insights.push({
         icon: '📅',
         tag: 'Historical Baseline',
-        text: `BroBudget is tracking your financial periods. Trend velocity and month-over-month comparisons activate across multi-month records.`
+        text:
+          'BroBudget is tracking your financial periods. More recorded months will provide stronger month-over-month comparisons.'
       });
     }
 
-    // Render top 4 insight cards
     let html = '';
+
     insights.slice(0, 4).forEach(item => {
       html += `
         <article class="bb-analytics-insight-item">
           <div class="bb-insight-tag">
             <span>${item.icon}</span>
-            <span>${item.tag}</span>
+            <span>${bbAnalyticsEscapeHtml(item.tag)}</span>
           </div>
-          <div class="bb-insight-text">${item.text}</div>
+
+          <div class="bb-insight-text">
+            ${item.text}
+          </div>
         </article>
       `;
     });
@@ -439,292 +918,745 @@
   }
 
   // --------------------------------------------------------------------------
-  // 8. Dual Chart Engine (Chart.js CDN + HTML5 Canvas Fallback)
+  // 10. Chart Engine
   // --------------------------------------------------------------------------
-  /**
-   * Renders all 3 required charts:
-   * 1. Expense Category Doughnut
-   * 2. Income vs Expense Bar Chart
-   * 3. Savings Trend Line Chart
-   */
+
   function bbAnalyticsRenderCharts() {
-    const hasChartJs = typeof window.Chart !== 'undefined';
-    if (hasChartJs) {
+    if (typeof window.Chart !== 'undefined') {
       bbAnalyticsRenderChartJs();
     } else {
       bbAnalyticsRenderFallbackCanvas();
     }
   }
 
-  /**
-   * Implementation using Chart.js CDN with customized dark glassmorphic palette
-   */
-  function bbAnalyticsRenderChartJs() {
-    const summary = bbAnalyticsState.monthlySummary;
-    const sortedKeys = Object.keys(summary).sort();
+  // --------------------------------------------------------------------------
+  // 11. Chart.js Renderer
+  // --------------------------------------------------------------------------
 
-    // Month Labels & Series Data
-    const labels = sortedKeys.map(k => {
-      const [year, month] = k.split('-');
-      return bbMonthNames[parseInt(month, 10)] ? bbMonthNames[parseInt(month, 10)].substring(0, 3) : k;
+  function bbAnalyticsRenderChartJs() {
+    const summary =
+      bbAnalyticsState.monthlySummary;
+
+    const sortedKeys =
+      Object.keys(summary).sort();
+
+    const labels = sortedKeys.map(key => {
+      const parts = key.split('-');
+      const monthIndex = Number(parts[1]);
+
+      return bbMonthNames[monthIndex]
+        ? bbMonthNames[monthIndex].substring(0, 3)
+        : key;
     });
 
-    const incomeSeries = sortedKeys.map(k => summary[k].income);
-    const expenseSeries = sortedKeys.map(k => summary[k].expenses);
-    const savingsSeries = sortedKeys.map(k => summary[k].savings);
+    const incomeSeries =
+      sortedKeys.map(key => summary[key].income);
 
-    // Active month category breakdown
-    const activeKey = bbAnalyticsState.activeReportMonthKey || sortedKeys[sortedKeys.length - 1];
-    const activeRecord = summary[activeKey] || { categories: {} };
-    const catMap = activeRecord.categories || {};
-    const catLabels = Object.keys(catMap).map(c => c.charAt(0).toUpperCase() + c.slice(1));
-    const catValues = Object.keys(catMap).map(c => catMap[c]);
-    const catPalette = Object.keys(catMap).map(c => bbCategoryColors[c.toLowerCase()] || '#8b5cf6');
+    const expenseSeries =
+      sortedKeys.map(key => summary[key].expenses);
 
-    // 1. Expense Category Doughnut
-    const ctxCat = document.getElementById('bb-chart-category-doughnut');
-    if (ctxCat) {
-      if (bbAnalyticsState.chartInstances.categoryDoughnut) {
+    const savingsSeries =
+      sortedKeys.map(key => summary[key].savings);
+
+    let activeKey =
+      bbAnalyticsState.activeReportMonthKey;
+
+    if (!summary[activeKey]) {
+      activeKey =
+        sortedKeys.length > 0
+          ? sortedKeys[sortedKeys.length - 1]
+          : null;
+    }
+
+    const activeRecord =
+      activeKey && summary[activeKey]
+        ? summary[activeKey]
+        : bbAnalyticsCreateEmptyMonth();
+
+    const categoryMap =
+      activeRecord.categories || {};
+
+    const categoryKeys =
+      Object.keys(categoryMap);
+
+    const categoryLabels =
+      categoryKeys.map(category =>
+        category.charAt(0).toUpperCase() +
+        category.slice(1)
+      );
+
+    const categoryValues =
+      categoryKeys.map(category =>
+        Number(categoryMap[category]) || 0
+      );
+
+    const categoryPalette =
+      categoryKeys.map(category =>
+        bbCategoryColors[
+          bbAnalyticsNormalizeCategory(category)
+        ] || '#8b5cf6'
+      );
+
+    // ------------------------------------------------------------------------
+    // Doughnut
+    // ------------------------------------------------------------------------
+
+    const categoryCanvas =
+      document.getElementById(
+        'bb-chart-category-doughnut'
+      );
+
+    if (categoryCanvas) {
+      if (
+        bbAnalyticsState.chartInstances.categoryDoughnut
+      ) {
         bbAnalyticsState.chartInstances.categoryDoughnut.destroy();
+
+        bbAnalyticsState.chartInstances.categoryDoughnut =
+          null;
       }
-      bbAnalyticsState.chartInstances.categoryDoughnut = new window.Chart(ctxCat, {
-        type: 'doughnut',
-        data: {
-          labels: catLabels.length > 0 ? catLabels : ['No Expenses'],
-          datasets: [{
-            data: catValues.length > 0 ? catValues : [1],
-            backgroundColor: catValues.length > 0 ? catPalette : ['#334155'],
-            borderColor: '#0f172a',
-            borderWidth: 2,
-            hoverOffset: 6
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { position: 'bottom', labels: { color: '#94a3b8', font: { family: 'Inter', size: 12 } } },
-            tooltip: {
-              callbacks: {
-                label: function (context) {
-                  return ` ${context.label}: ₹${Number(context.raw).toLocaleString('en-IN')}`;
+
+      bbAnalyticsState.chartInstances.categoryDoughnut =
+        new window.Chart(categoryCanvas, {
+          type: 'doughnut',
+
+          data: {
+            labels:
+              categoryLabels.length > 0
+                ? categoryLabels
+                : ['No Expenses'],
+
+            datasets: [
+              {
+                data:
+                  categoryValues.length > 0
+                    ? categoryValues
+                    : [1],
+
+                backgroundColor:
+                  categoryValues.length > 0
+                    ? categoryPalette
+                    : ['#334155'],
+
+                borderColor: '#0f172a',
+                borderWidth: 2,
+                hoverOffset: 6
+              }
+            ]
+          },
+
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+
+            plugins: {
+              legend: {
+                position: 'bottom',
+
+                labels: {
+                  color: '#94a3b8',
+                  font: {
+                    family: 'Inter',
+                    size: 12
+                  }
+                }
+              },
+
+              tooltip: {
+                callbacks: {
+                  label: function (context) {
+                    return (
+                      ` ${context.label}: ` +
+                      bbAnalyticsFormatCurrency(
+                        Number(context.raw) || 0
+                      )
+                    );
+                  }
+                }
+              }
+            },
+
+            cutout: '70%'
+          }
+        });
+    }
+
+    // ------------------------------------------------------------------------
+    // Income / Expense Bar
+    // ------------------------------------------------------------------------
+
+    const barCanvas =
+      document.getElementById(
+        'bb-chart-income-expense-bar'
+      );
+
+    if (barCanvas) {
+      if (
+        bbAnalyticsState.chartInstances.incomeExpenseBar
+      ) {
+        bbAnalyticsState.chartInstances.incomeExpenseBar.destroy();
+
+        bbAnalyticsState.chartInstances.incomeExpenseBar =
+          null;
+      }
+
+      bbAnalyticsState.chartInstances.incomeExpenseBar =
+        new window.Chart(barCanvas, {
+          type: 'bar',
+
+          data: {
+            labels,
+
+            datasets: [
+              {
+                label: 'Income',
+                data: incomeSeries,
+                backgroundColor:
+                  'rgba(16, 185, 129, 0.8)',
+                borderColor: '#10b981',
+                borderRadius: 6
+              },
+
+              {
+                label: 'Expenses',
+                data: expenseSeries,
+                backgroundColor:
+                  'rgba(244, 63, 94, 0.8)',
+                borderColor: '#f43f5e',
+                borderRadius: 6
+              }
+            ]
+          },
+
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+
+            scales: {
+              x: {
+                grid: {
+                  color: 'rgba(255,255,255,0.05)'
+                },
+
+                ticks: {
+                  color: '#94a3b8'
+                }
+              },
+
+              y: {
+                grid: {
+                  color: 'rgba(255,255,255,0.05)'
+                },
+
+                ticks: {
+                  color: '#94a3b8',
+
+                  callback: function (value) {
+                    return `₹${(value / 1000).toFixed(0)}k`;
+                  }
+                }
+              }
+            },
+
+            plugins: {
+              legend: {
+                position: 'top',
+
+                labels: {
+                  color: '#94a3b8'
                 }
               }
             }
-          },
-          cutout: '70%'
-        }
-      });
-    }
-
-    // 2. Income vs Expense Bar Chart
-    const ctxBar = document.getElementById('bb-chart-income-expense-bar');
-    if (ctxBar) {
-      if (bbAnalyticsState.chartInstances.incomeExpenseBar) {
-        bbAnalyticsState.chartInstances.incomeExpenseBar.destroy();
-      }
-      bbAnalyticsState.chartInstances.incomeExpenseBar = new window.Chart(ctxBar, {
-        type: 'bar',
-        data: {
-          labels: labels,
-          datasets: [
-            {
-              label: 'Income',
-              data: incomeSeries,
-              backgroundColor: 'rgba(16, 185, 129, 0.8)',
-              borderColor: '#10b981',
-              borderRadius: 6
-            },
-            {
-              label: 'Expenses',
-              data: expenseSeries,
-              backgroundColor: 'rgba(244, 63, 94, 0.8)',
-              borderColor: '#f43f5e',
-              borderRadius: 6
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: {
-            x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-            y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', callback: v => `₹${(v/1000).toFixed(0)}k` } }
-          },
-          plugins: {
-            legend: { position: 'top', labels: { color: '#94a3b8' } }
           }
-        }
-      });
+        });
     }
 
-    // 3. Savings Trend Line Chart
-    const ctxLine = document.getElementById('bb-chart-savings-trend-line');
-    if (ctxLine) {
-      if (bbAnalyticsState.chartInstances.savingsLine) {
+    // ------------------------------------------------------------------------
+    // Savings Line
+    // ------------------------------------------------------------------------
+
+    const lineCanvas =
+      document.getElementById(
+        'bb-chart-savings-trend-line'
+      );
+
+    if (lineCanvas) {
+      if (
+        bbAnalyticsState.chartInstances.savingsLine
+      ) {
         bbAnalyticsState.chartInstances.savingsLine.destroy();
+
+        bbAnalyticsState.chartInstances.savingsLine =
+          null;
       }
-      bbAnalyticsState.chartInstances.savingsLine = new window.Chart(ctxLine, {
-        type: 'line',
-        data: {
-          labels: labels,
-          datasets: [{
-            label: 'Net Savings',
-            data: savingsSeries,
-            borderColor: '#8b5cf6',
-            backgroundColor: 'rgba(139, 92, 246, 0.15)',
-            borderWidth: 3,
-            fill: true,
-            tension: 0.38,
-            pointBackgroundColor: '#a78bfa',
-            pointBorderColor: '#0f172a',
-            pointRadius: 5,
-            pointHoverRadius: 8
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: {
-            x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-            y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8', callback: v => `₹${(v/1000).toFixed(0)}k` } }
+
+      bbAnalyticsState.chartInstances.savingsLine =
+        new window.Chart(lineCanvas, {
+          type: 'line',
+
+          data: {
+            labels,
+
+            datasets: [
+              {
+                label: 'Net Savings',
+                data: savingsSeries,
+
+                borderColor: '#8b5cf6',
+
+                backgroundColor:
+                  'rgba(139, 92, 246, 0.15)',
+
+                borderWidth: 3,
+                fill: true,
+                tension: 0.38,
+
+                pointBackgroundColor:
+                  '#a78bfa',
+
+                pointBorderColor:
+                  '#0f172a',
+
+                pointRadius: 5,
+                pointHoverRadius: 8
+              }
+            ]
           },
-          plugins: {
-            legend: { display: false }
+
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+
+            scales: {
+              x: {
+                grid: {
+                  color: 'rgba(255,255,255,0.05)'
+                },
+
+                ticks: {
+                  color: '#94a3b8'
+                }
+              },
+
+              y: {
+                grid: {
+                  color: 'rgba(255,255,255,0.05)'
+                },
+
+                ticks: {
+                  color: '#94a3b8',
+
+                  callback: function (value) {
+                    return `₹${(value / 1000).toFixed(0)}k`;
+                  }
+                }
+              }
+            },
+
+            plugins: {
+              legend: {
+                display: false
+              }
+            }
           }
-        }
-      });
+        });
     }
   }
 
-  /**
-   * High-Performance Pure HTML5 Canvas Fallback Renderer (Zero Dependencies, Offline-Guaranteed)
-   */
+  // --------------------------------------------------------------------------
+  // 12. Canvas Fallback
+  // --------------------------------------------------------------------------
+
+  function bbAnalyticsPrepareCanvas(canvas, fallbackWidth, fallbackHeight) {
+    if (!canvas || !canvas.getContext) {
+      return null;
+    }
+
+    const ctx = canvas.getContext('2d');
+
+    const dpr =
+      window.devicePixelRatio || 1;
+
+    const rect =
+      canvas.getBoundingClientRect();
+
+    const width =
+      rect.width || fallbackWidth;
+
+    const height =
+      rect.height || fallbackHeight;
+
+    canvas.width =
+      Math.round(width * dpr);
+
+    canvas.height =
+      Math.round(height * dpr);
+
+    ctx.setTransform(
+      dpr,
+      0,
+      0,
+      dpr,
+      0,
+      0
+    );
+
+    ctx.clearRect(
+      0,
+      0,
+      width,
+      height
+    );
+
+    return {
+      ctx,
+      width,
+      height
+    };
+  }
+
   function bbAnalyticsRenderFallbackCanvas() {
-    const summary = bbAnalyticsState.monthlySummary;
-    const sortedKeys = Object.keys(summary).sort();
+    const summary =
+      bbAnalyticsState.monthlySummary;
 
-    // 1. Doughnut Chart Fallback
-    const cvsCat = document.getElementById('bb-chart-category-doughnut');
-    if (cvsCat && cvsCat.getContext) {
-      const ctx = cvsCat.getContext('2d');
-      const dpr = window.devicePixelRatio || 1;
-      const rect = cvsCat.getBoundingClientRect();
-      cvsCat.width = (rect.width || 300) * dpr;
-      cvsCat.height = (rect.height || 260) * dpr;
-      ctx.scale(dpr, dpr);
+    const sortedKeys =
+      Object.keys(summary).sort();
 
-      const activeKey = bbAnalyticsState.activeReportMonthKey || sortedKeys[sortedKeys.length - 1];
-      const categories = (summary[activeKey] && summary[activeKey].categories) || {};
-      const keys = Object.keys(categories);
-      const total = keys.reduce((acc, c) => acc + categories[c], 0);
+    // ------------------------------------------------------------------------
+    // Doughnut
+    // ------------------------------------------------------------------------
 
-      const centerX = (rect.width || 300) / 2;
-      const centerY = (rect.height || 260) / 2 - 15;
-      const radius = Math.min(centerX, centerY) - 20;
+    const categoryCanvas =
+      document.getElementById(
+        'bb-chart-category-doughnut'
+      );
 
-      ctx.clearRect(0, 0, rect.width, rect.height);
+    const categorySurface =
+      bbAnalyticsPrepareCanvas(
+        categoryCanvas,
+        300,
+        260
+      );
+
+    if (categorySurface) {
+      const ctx = categorySurface.ctx;
+      const width = categorySurface.width;
+      const height = categorySurface.height;
+
+      let activeKey =
+        bbAnalyticsState.activeReportMonthKey;
+
+      if (!summary[activeKey]) {
+        activeKey =
+          sortedKeys.length > 0
+            ? sortedKeys[sortedKeys.length - 1]
+            : null;
+      }
+
+      const categories =
+        activeKey && summary[activeKey]
+          ? summary[activeKey].categories || {}
+          : {};
+
+      const categoryKeys =
+        Object.keys(categories);
+
+      const total =
+        categoryKeys.reduce(
+          (sum, category) =>
+            sum +
+            (Number(categories[category]) || 0),
+          0
+        );
+
+      const centerX = width / 2;
+      const centerY = height / 2 - 15;
+
+      const radius =
+        Math.max(
+          20,
+          Math.min(centerX, centerY) - 20
+        );
 
       if (total <= 0) {
         ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+
+        ctx.arc(
+          centerX,
+          centerY,
+          radius,
+          0,
+          2 * Math.PI
+        );
+
         ctx.strokeStyle = '#334155';
         ctx.lineWidth = 28;
         ctx.stroke();
       } else {
         let startAngle = -Math.PI / 2;
-        keys.forEach(cat => {
-          const sliceAngle = (categories[cat] / total) * 2 * Math.PI;
+
+        categoryKeys.forEach(category => {
+          const amount =
+            Number(categories[category]) || 0;
+
+          const sliceAngle =
+            (amount / total) *
+            2 *
+            Math.PI;
+
           ctx.beginPath();
-          ctx.arc(centerX, centerY, radius, startAngle, startAngle + sliceAngle);
-          ctx.strokeStyle = bbCategoryColors[cat] || '#8b5cf6';
+
+          ctx.arc(
+            centerX,
+            centerY,
+            radius,
+            startAngle,
+            startAngle + sliceAngle
+          );
+
+          ctx.strokeStyle =
+            bbCategoryColors[
+              bbAnalyticsNormalizeCategory(category)
+            ] || '#8b5cf6';
+
           ctx.lineWidth = 28;
           ctx.stroke();
+
           startAngle += sliceAngle;
         });
       }
 
-      // Center text
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 15px Inter, sans-serif';
+      ctx.font =
+        'bold 15px Inter, sans-serif';
+
       ctx.textAlign = 'center';
-      ctx.fillText(bbAnalyticsFormatCurrency(total), centerX, centerY + 5);
+
+      ctx.fillText(
+        bbAnalyticsFormatCurrency(total),
+        centerX,
+        centerY + 5
+      );
     }
 
-    // 2. Bar Chart Fallback
-    const cvsBar = document.getElementById('bb-chart-income-expense-bar');
-    if (cvsBar && cvsBar.getContext) {
-      const ctx = cvsBar.getContext('2d');
-      const dpr = window.devicePixelRatio || 1;
-      const rect = cvsBar.getBoundingClientRect();
-      cvsBar.width = (rect.width || 300) * dpr;
-      cvsBar.height = (rect.height || 260) * dpr;
-      ctx.scale(dpr, dpr);
-      ctx.clearRect(0, 0, rect.width, rect.height);
+    // ------------------------------------------------------------------------
+    // Bar Chart
+    // ------------------------------------------------------------------------
 
-      const maxVal = Math.max(...sortedKeys.map(k => Math.max(summary[k].income, summary[k].expenses)), 1000);
-      const chartHeight = (rect.height || 260) - 50;
-      const groupWidth = ((rect.width || 300) - 40) / sortedKeys.length;
+    const barCanvas =
+      document.getElementById(
+        'bb-chart-income-expense-bar'
+      );
 
-      sortedKeys.forEach((k, idx) => {
-        const x = 30 + idx * groupWidth;
-        const incHeight = (summary[k].income / maxVal) * chartHeight;
-        const expHeight = (summary[k].expenses / maxVal) * chartHeight;
-        const barW = Math.min(groupWidth / 2 - 4, 16);
+    const barSurface =
+      bbAnalyticsPrepareCanvas(
+        barCanvas,
+        300,
+        260
+      );
 
-        // Income Bar
+    if (barSurface) {
+      const ctx = barSurface.ctx;
+      const width = barSurface.width;
+      const height = barSurface.height;
+
+      if (sortedKeys.length === 0) {
+        return;
+      }
+
+      const maxValue = Math.max(
+        ...sortedKeys.map(key =>
+          Math.max(
+            Number(summary[key].income) || 0,
+            Number(summary[key].expenses) || 0
+          )
+        ),
+        1000
+      );
+
+      const chartHeight =
+        height - 50;
+
+      const groupWidth =
+        (width - 40) /
+        Math.max(sortedKeys.length, 1);
+
+      sortedKeys.forEach((key, index) => {
+        const x =
+          30 + index * groupWidth;
+
+        const income =
+          Number(summary[key].income) || 0;
+
+        const expenses =
+          Number(summary[key].expenses) || 0;
+
+        const incomeHeight =
+          (income / maxValue) *
+          chartHeight;
+
+        const expenseHeight =
+          (expenses / maxValue) *
+          chartHeight;
+
+        const barWidth =
+          Math.min(
+            groupWidth / 2 - 4,
+            16
+          );
+
         ctx.fillStyle = '#10b981';
-        ctx.fillRect(x, chartHeight - incHeight + 20, barW, incHeight);
 
-        // Expense Bar
+        ctx.fillRect(
+          x,
+          chartHeight -
+            incomeHeight +
+            20,
+          barWidth,
+          incomeHeight
+        );
+
         ctx.fillStyle = '#f43f5e';
-        ctx.fillRect(x + barW + 2, chartHeight - expHeight + 20, barW, expHeight);
 
-        // Month Label
-        const [y, m] = k.split('-');
+        ctx.fillRect(
+          x + barWidth + 2,
+          chartHeight -
+            expenseHeight +
+            20,
+          barWidth,
+          expenseHeight
+        );
+
+        const parts =
+          key.split('-');
+
+        const monthIndex =
+          Number(parts[1]);
+
         ctx.fillStyle = '#94a3b8';
-        ctx.font = '11px Inter, sans-serif';
+        ctx.font =
+          '11px Inter, sans-serif';
+
         ctx.textAlign = 'center';
-        ctx.fillText(bbMonthNames[parseInt(m, 10)].substring(0, 3), x + barW, chartHeight + 36);
+
+        ctx.fillText(
+          bbMonthNames[monthIndex]
+            ? bbMonthNames[monthIndex]
+                .substring(0, 3)
+            : '',
+          x + barWidth,
+          chartHeight + 36
+        );
       });
     }
 
-    // 3. Line Chart Fallback
-    const cvsLine = document.getElementById('bb-chart-savings-trend-line');
-    if (cvsLine && cvsLine.getContext) {
-      const ctx = cvsLine.getContext('2d');
-      const dpr = window.devicePixelRatio || 1;
-      const rect = cvsLine.getBoundingClientRect();
-      cvsLine.width = (rect.width || 600) * dpr;
-      cvsLine.height = (rect.height || 260) * dpr;
-      ctx.scale(dpr, dpr);
-      ctx.clearRect(0, 0, rect.width, rect.height);
+    // ------------------------------------------------------------------------
+    // Savings Line
+    // ------------------------------------------------------------------------
 
-      const savings = sortedKeys.map(k => summary[k].savings);
-      const maxSav = Math.max(...savings, 1000);
-      const minSav = Math.min(...savings, 0);
-      const range = maxSav - minSav || 1;
-      const chartH = (rect.height || 260) - 50;
-      const stepX = ((rect.width || 600) - 60) / (sortedKeys.length - 1 || 1);
+    const lineCanvas =
+      document.getElementById(
+        'bb-chart-savings-trend-line'
+      );
+
+    const lineSurface =
+      bbAnalyticsPrepareCanvas(
+        lineCanvas,
+        600,
+        260
+      );
+
+    if (lineSurface) {
+      const ctx = lineSurface.ctx;
+      const width = lineSurface.width;
+      const height = lineSurface.height;
+
+      if (sortedKeys.length === 0) {
+        return;
+      }
+
+      const savings =
+        sortedKeys.map(key =>
+          Number(summary[key].savings) || 0
+        );
+
+      const maxSavings =
+        Math.max(...savings, 1000);
+
+      const minSavings =
+        Math.min(...savings, 0);
+
+      const range =
+        maxSavings -
+        minSavings ||
+        1;
+
+      const chartHeight =
+        height - 50;
+
+      const stepX =
+        (width - 60) /
+        Math.max(
+          sortedKeys.length - 1,
+          1
+        );
 
       ctx.beginPath();
+
       ctx.strokeStyle = '#8b5cf6';
       ctx.lineWidth = 3;
 
-      sortedKeys.forEach((k, idx) => {
-        const x = 30 + idx * stepX;
-        const y = chartH - ((summary[k].savings - minSav) / range) * chartH + 20;
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      sortedKeys.forEach((key, index) => {
+        const x =
+          30 + index * stepX;
+
+        const y =
+          chartHeight -
+          (
+            (
+              (Number(summary[key].savings) || 0) -
+              minSavings
+            ) /
+            range
+          ) *
+          chartHeight +
+          20;
+
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
       });
+
       ctx.stroke();
 
-      // Points
-      sortedKeys.forEach((k, idx) => {
-        const x = 30 + idx * stepX;
-        const y = chartH - ((summary[k].savings - minSav) / range) * chartH + 20;
+      sortedKeys.forEach((key, index) => {
+        const x =
+          30 + index * stepX;
+
+        const y =
+          chartHeight -
+          (
+            (
+              (Number(summary[key].savings) || 0) -
+              minSavings
+            ) /
+            range
+          ) *
+          chartHeight +
+          20;
+
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, 2 * Math.PI);
+
+        ctx.arc(
+          x,
+          y,
+          4,
+          0,
+          2 * Math.PI
+        );
+
         ctx.fillStyle = '#a78bfa';
         ctx.fill();
       });
@@ -732,76 +1664,146 @@
   }
 
   // --------------------------------------------------------------------------
-  // 9. Savings Goals Management (bbSavings*)
+  // 13. Savings Goals
   // --------------------------------------------------------------------------
-  /**
-   * Renders the savings goal cards with animated progress bars,
-   * hover animations, and the "🎉 Goal Achieved!" banner at 100%.
-   */
-  function bbSavingsRenderGoals() {
-    const container = document.getElementById('bb-savings-goals-grid');
-    if (!container) return;
 
-    const goals = bbAnalyticsState.savingsGoals || bbSavingsGetGoals();
+  function bbSavingsRenderGoals() {
+    const container =
+      document.getElementById(
+        'bb-savings-goals-grid'
+      );
+
+    if (!container) {
+      return;
+    }
+
+    const goals =
+      bbAnalyticsState.savingsGoals ||
+      bbSavingsGetGoals();
 
     if (goals.length === 0) {
       container.innerHTML = `
-        <div style="grid-column: 1 / -1; padding: 30px; text-align: center; color: var(--bb-text-muted);">
+        <div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--bb-text-muted);">
           No active savings goals found. Click <strong>+ Create New Goal</strong> to set your first target!
         </div>
       `;
+
       return;
     }
 
     let html = '';
+
     goals.forEach(goal => {
-      const target = Number(goal.targetAmount) || 1;
-      const current = Number(goal.currentSaved) || 0;
-      const pct = Math.min(Math.max(Number(((current / target) * 100).toFixed(2)), 0), 100);
-      const isCompleted = pct >= 100;
+      const target =
+        Number(goal.targetAmount) || 1;
+
+      const current =
+        Number(goal.currentSaved) || 0;
+
+      const percentage =
+        Math.min(
+          Math.max(
+            Number(
+              (
+                (current / target) *
+                100
+              ).toFixed(2)
+            ),
+            0
+          ),
+          100
+        );
+
+      const completed =
+        percentage >= 100;
+
+      const safeName =
+        bbAnalyticsEscapeHtml(goal.name);
+
+      const safeDate =
+        bbAnalyticsEscapeHtml(
+          goal.targetDate || 'Ongoing'
+        );
 
       html += `
-        <article class="bb-savings-card ${isCompleted ? 'bb-goal-completed' : ''}" id="bb-goal-card-${goal.id}">
+        <article
+          class="bb-savings-card ${completed ? 'bb-goal-completed' : ''}"
+          id="bb-goal-card-${goal.id}"
+        >
+
           <div class="bb-savings-card-header">
-            <h3 class="bb-savings-goal-name">${escapeHtml(goal.name)}</h3>
-            <span class="bb-savings-goal-tag">${isCompleted ? 'Completed' : 'In Progress'}</span>
+            <h3 class="bb-savings-goal-name">
+              ${safeName}
+            </h3>
+
+            <span class="bb-savings-goal-tag">
+              ${completed ? 'Completed' : 'In Progress'}
+            </span>
           </div>
 
           <div class="bb-savings-amounts-row">
             <div>
-              <div class="bb-savings-saved-label">Current Saved</div>
-              <div class="bb-savings-saved-val">${bbAnalyticsFormatCurrency(current)}</div>
+              <div class="bb-savings-saved-label">
+                Current Saved
+              </div>
+
+              <div class="bb-savings-saved-val">
+                ${bbAnalyticsFormatCurrency(current)}
+              </div>
             </div>
-            <div style="text-align: right;">
-              <div class="bb-savings-saved-label">Target Goal</div>
-              <div class="bb-savings-target-val">${bbAnalyticsFormatCurrency(target)}</div>
+
+            <div style="text-align:right;">
+              <div class="bb-savings-saved-label">
+                Target Goal
+              </div>
+
+              <div class="bb-savings-target-val">
+                ${bbAnalyticsFormatCurrency(target)}
+              </div>
             </div>
           </div>
 
-          <!-- Animated Progress Bar -->
           <div class="bb-savings-progress-track">
-            <div class="bb-savings-progress-fill" style="width: ${pct}%;"></div>
+            <div
+              class="bb-savings-progress-fill"
+              style="width:${percentage}%"
+            ></div>
           </div>
 
           <div class="bb-savings-progress-meta">
-            <span>Target: ${goal.targetDate || 'Ongoing'}</span>
-            <span class="bb-savings-pct-val">${pct.toFixed(1)}%</span>
+            <span>
+              Target: ${safeDate}
+            </span>
+
+            <span class="bb-savings-pct-val">
+              ${percentage.toFixed(1)}%
+            </span>
           </div>
 
-          <!-- Goal Achieved Banner if 100% -->
           <div class="bb-savings-achieved-badge">
             🎉 Goal Achieved!
           </div>
 
-          <!-- Card Actions -->
           <div class="bb-savings-card-actions">
-            <button type="button" class="bb-savings-btn-deposit" onclick="window.BBAnalytics.openDepositModal(${goal.id})">
+            <button
+              type="button"
+              class="bb-savings-btn-deposit"
+              onclick="window.BBAnalytics.openDepositModal(${Number(goal.id)})"
+            >
               + Add Funds
             </button>
-            <button type="button" class="bb-savings-btn-delete" title="Delete Goal" aria-label="Delete Goal ${escapeHtml(goal.name)}" onclick="window.BBAnalytics.deleteGoal(${goal.id})">
+
+            <button
+              type="button"
+              class="bb-savings-btn-delete"
+              title="Delete Goal"
+              aria-label="Delete Goal ${safeName}"
+              onclick="window.BBAnalytics.deleteGoal(${Number(goal.id)})"
+            >
               🗑️
             </button>
           </div>
+
         </article>
       `;
     });
@@ -809,179 +1811,434 @@
     container.innerHTML = html;
   }
 
-  /**
-   * Creates a new savings goal
-   */
   function bbSavingsCreateGoal(goalData) {
-    const goals = bbSavingsGetGoals();
+    const goals =
+      bbSavingsGetGoals();
+
+    const name =
+      String(goalData.name || '').trim();
+
+    const targetAmount =
+      Number(goalData.targetAmount);
+
+    const currentSaved =
+      Number(goalData.currentSaved) || 0;
+
+    if (
+      !name ||
+      !Number.isFinite(targetAmount) ||
+      targetAmount <= 0
+    ) {
+      return null;
+    }
+
     const newGoal = {
       id: Date.now(),
-      name: goalData.name.trim(),
-      targetAmount: Number(goalData.targetAmount),
-      currentSaved: Number(goalData.currentSaved) || 0,
-      targetDate: goalData.targetDate || ''
+      name,
+      targetAmount,
+      currentSaved:
+        Math.max(currentSaved, 0),
+      targetDate:
+        goalData.targetDate || ''
     };
 
     goals.unshift(newGoal);
+
     bbSavingsSaveGoals(goals);
+
     bbSavingsRenderGoals();
-    bbAnalyticsShowToast('Goal Created', `Target for "${newGoal.name}" established!`, '🎯');
+
+    bbAnalyticsShowToast(
+      'Goal Created',
+      `Target for "${bbAnalyticsEscapeHtml(newGoal.name)}" established!`,
+      '🎯'
+    );
+
     return newGoal;
   }
 
-  /**
-   * Adds deposit funds to an existing savings goal
-   */
   function bbSavingsAddDeposit(goalId, amount) {
-    const goals = bbSavingsGetGoals();
-    const goal = goals.find(g => String(g.id) === String(goalId));
-    if (!goal) return;
+    const goals =
+      bbSavingsGetGoals();
 
-    goal.currentSaved = (Number(goal.currentSaved) || 0) + Number(amount);
+    const goal =
+      goals.find(
+        item =>
+          String(item.id) ===
+          String(goalId)
+      );
+
+    if (!goal) {
+      return false;
+    }
+
+    const deposit =
+      Number(amount);
+
+    if (
+      !Number.isFinite(deposit) ||
+      deposit <= 0
+    ) {
+      return false;
+    }
+
+    goal.currentSaved =
+      (Number(goal.currentSaved) || 0) +
+      deposit;
+
     bbSavingsSaveGoals(goals);
+
     bbSavingsRenderGoals();
-    bbAnalyticsShowToast('Funds Deposited', `Added ${bbAnalyticsFormatCurrency(amount)} to "${goal.name}".`, '💰');
+
+    bbAnalyticsShowToast(
+      'Funds Deposited',
+      `Added ${bbAnalyticsFormatCurrency(deposit)} to "${bbAnalyticsEscapeHtml(goal.name)}".`,
+      '💰'
+    );
+
+    return true;
   }
 
-  /**
-   * Deletes a savings goal
-   */
   function bbSavingsDeleteGoal(goalId) {
-    let goals = bbSavingsGetGoals();
-    const target = goals.find(g => String(g.id) === String(goalId));
-    goals = goals.filter(g => String(g.id) !== String(goalId));
-    bbSavingsSaveGoals(goals);
+    const goals =
+      bbSavingsGetGoals();
+
+    const target =
+      goals.find(
+        item =>
+          String(item.id) ===
+          String(goalId)
+      );
+
+    const updatedGoals =
+      goals.filter(
+        item =>
+          String(item.id) !==
+          String(goalId)
+      );
+
+    bbSavingsSaveGoals(updatedGoals);
+
     bbSavingsRenderGoals();
+
     if (target) {
-      bbAnalyticsShowToast('Goal Removed', `Deleted "${target.name}".`, '🗑️');
+      bbAnalyticsShowToast(
+        'Goal Removed',
+        `Deleted "${bbAnalyticsEscapeHtml(target.name)}".`,
+        '🗑️'
+      );
+
+      return true;
     }
+
+    return false;
   }
 
   // --------------------------------------------------------------------------
-  // 10. Monthly Report Card (bbReports*)
+  // 14. Monthly Report
   // --------------------------------------------------------------------------
-  /**
-   * Renders the executive report card for a selected month:
-   * Month, Total Income, Total Expenses, Savings, Savings %,
-   * Largest Expense Category, Number of Transactions
-   */
+
   function bbReportsRenderMonthlyReport() {
-    const summary = bbAnalyticsState.monthlySummary;
-    const sortedKeys = Object.keys(summary).sort();
+    const summary =
+      bbAnalyticsState.monthlySummary;
 
-    // Populate Report Month Dropdown
-    const selectEl = document.getElementById('bb-report-month-select');
-    if (selectEl && selectEl.children.length === 0) {
+    const sortedKeys =
+      Object.keys(summary).sort();
+
+    const select =
+      document.getElementById(
+        'bb-report-month-select'
+      );
+
+    if (select) {
+      const currentValue =
+        bbAnalyticsState.activeReportMonthKey;
+
+      select.innerHTML = '';
+
       sortedKeys.forEach(key => {
-        const [year, month] = key.split('-');
-        const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = `${bbMonthNames[parseInt(month, 10)]} ${year}`;
-        if (key === bbAnalyticsState.activeReportMonthKey) opt.selected = true;
-        selectEl.appendChild(opt);
+        const parts =
+          key.split('-');
+
+        const year =
+          Number(parts[0]);
+
+        const monthIndex =
+          Number(parts[1]);
+
+        const option =
+          document.createElement('option');
+
+        option.value = key;
+
+        option.textContent =
+          `${bbMonthNames[monthIndex] || 'Month'} ${year}`;
+
+        select.appendChild(option);
       });
 
-      selectEl.addEventListener('change', (e) => {
-        bbAnalyticsState.activeReportMonthKey = e.target.value;
-        bbReportsRenderMonthlyReport();
-        bbAnalyticsGenerateInsights();
-        bbAnalyticsRenderCharts();
-      });
+      if (
+        sortedKeys.length > 0 &&
+        sortedKeys.includes(currentValue)
+      ) {
+        select.value = currentValue;
+      } else if (sortedKeys.length > 0) {
+        bbAnalyticsState.activeReportMonthKey =
+          sortedKeys[sortedKeys.length - 1];
+
+        select.value =
+          bbAnalyticsState.activeReportMonthKey;
+      }
     }
 
-    const activeKey = bbAnalyticsState.activeReportMonthKey || sortedKeys[sortedKeys.length - 1];
-    const data = summary[activeKey] || {
-      income: 0,
-      expenses: 0,
-      savings: 0,
-      savingsPercentage: 0,
-      categories: {},
-      transactionsCount: 0
-    };
+    const activeKey =
+      bbAnalyticsState.activeReportMonthKey;
 
-    // Find largest expense category
-    let topCat = 'None';
-    let topCatAmt = 0;
-    Object.keys(data.categories || {}).forEach(c => {
-      if (data.categories[c] > topCatAmt) {
-        topCatAmt = data.categories[c];
-        topCat = c.charAt(0).toUpperCase() + c.slice(1);
+    const data =
+      summary[activeKey] ||
+      bbAnalyticsCreateEmptyMonth();
+
+    let topCategory = 'None';
+    let topCategoryAmount = 0;
+
+    Object.keys(
+      data.categories || {}
+    ).forEach(category => {
+      const amount =
+        Number(data.categories[category]) || 0;
+
+      if (amount > topCategoryAmount) {
+        topCategoryAmount = amount;
+
+        topCategory =
+          category.charAt(0).toUpperCase() +
+          category.slice(1);
       }
     });
 
-    const elInc = document.getElementById('bb-rep-income');
-    const elExp = document.getElementById('bb-rep-expenses');
-    const elSav = document.getElementById('bb-rep-savings');
-    const elRate = document.getElementById('bb-rep-rate');
-    const elTop = document.getElementById('bb-rep-top-category');
-    const elCount = document.getElementById('bb-rep-tx-count');
+    const incomeElement =
+      document.getElementById(
+        'bb-rep-income'
+      );
 
-    if (elInc) elInc.textContent = bbAnalyticsFormatCurrency(data.income);
-    if (elExp) elExp.textContent = bbAnalyticsFormatCurrency(data.expenses);
-    if (elSav) {
-      elSav.textContent = bbAnalyticsFormatCurrency(data.savings);
-      elSav.style.color = data.savings < 0 ? 'var(--bb-color-expense-light)' : 'var(--bb-color-income-light)';
+    const expensesElement =
+      document.getElementById(
+        'bb-rep-expenses'
+      );
+
+    const savingsElement =
+      document.getElementById(
+        'bb-rep-savings'
+      );
+
+    const rateElement =
+      document.getElementById(
+        'bb-rep-rate'
+      );
+
+    const topElement =
+      document.getElementById(
+        'bb-rep-top-category'
+      );
+
+    const countElement =
+      document.getElementById(
+        'bb-rep-tx-count'
+      );
+
+    if (incomeElement) {
+      incomeElement.textContent =
+        bbAnalyticsFormatCurrency(
+          data.income
+        );
     }
-    if (elRate) elRate.textContent = bbAnalyticsFormatPercentage(data.savingsPercentage);
-    if (elTop) elTop.textContent = topCatAmt > 0 ? `${topCat} (${bbAnalyticsFormatCurrency(topCatAmt)})` : 'None';
-    if (elCount) elCount.textContent = data.transactionsCount;
+
+    if (expensesElement) {
+      expensesElement.textContent =
+        bbAnalyticsFormatCurrency(
+          data.expenses
+        );
+    }
+
+    if (savingsElement) {
+      savingsElement.textContent =
+        bbAnalyticsFormatCurrency(
+          data.savings
+        );
+
+      savingsElement.style.color =
+        data.savings < 0
+          ? 'var(--bb-color-expense-light)'
+          : 'var(--bb-color-income-light)';
+    }
+
+    if (rateElement) {
+      rateElement.textContent =
+        bbAnalyticsFormatPercentage(
+          data.savingsPercentage
+        );
+    }
+
+    if (topElement) {
+      topElement.textContent =
+        topCategoryAmount > 0
+          ? `${topCategory} (${bbAnalyticsFormatCurrency(topCategoryAmount)})`
+          : 'None';
+    }
+
+    if (countElement) {
+      countElement.textContent =
+        String(
+          Number(data.transactionsCount) || 0
+        );
+    }
   }
 
   // --------------------------------------------------------------------------
-  // 11. Monthly History Table with Sorting (bbReports*)
+  // 15. Monthly History
   // --------------------------------------------------------------------------
-  /**
-   * Renders the comprehensive Monthly History table:
-   * Month, Income, Expenses, Savings, Savings %
-   * Supports sorting by month, income, expenses, savings, and savings percentage.
-   */
+
   function bbReportsRenderHistoryTable() {
-    const tableBody = document.getElementById('bb-history-table-body');
-    if (!tableBody) return;
+    const tableBody =
+      document.getElementById(
+        'bb-history-table-body'
+      );
 
-    const summary = bbAnalyticsState.monthlySummary;
-    let list = Object.keys(summary).map(key => {
-      const [year, month] = key.split('-');
-      return {
-        key,
-        year: parseInt(year, 10),
-        monthIndex: parseInt(month, 10),
-        monthName: `${bbMonthNames[parseInt(month, 10)]} ${year}`,
-        income: summary[key].income,
-        expenses: summary[key].expenses,
-        savings: summary[key].savings,
-        savingsPercentage: summary[key].savingsPercentage
-      };
-    });
+    if (!tableBody) {
+      return;
+    }
 
-    // Sorting Logic
-    const col = bbAnalyticsState.historySortColumn;
-    const asc = bbAnalyticsState.historySortAsc;
+    const summary =
+      bbAnalyticsState.monthlySummary;
+
+    const list =
+      Object.keys(summary).map(key => {
+        const parts =
+          key.split('-');
+
+        const year =
+          Number(parts[0]);
+
+        const monthIndex =
+          Number(parts[1]);
+
+        return {
+          key,
+          year,
+          monthIndex,
+
+          monthName:
+            `${bbMonthNames[monthIndex] || 'Month'} ${year}`,
+
+          income:
+            Number(summary[key].income) || 0,
+
+          expenses:
+            Number(summary[key].expenses) || 0,
+
+          savings:
+            Number(summary[key].savings) || 0,
+
+          savingsPercentage:
+            Number(summary[key].savingsPercentage) || 0
+        };
+      });
+
+    const column =
+      bbAnalyticsState.historySortColumn;
+
+    const ascending =
+      bbAnalyticsState.historySortAsc;
 
     list.sort((a, b) => {
-      let valA, valB;
-      if (col === 'month') {
-        valA = a.year * 100 + a.monthIndex;
-        valB = b.year * 100 + b.monthIndex;
+      let valueA;
+      let valueB;
+
+      if (column === 'month') {
+        valueA =
+          a.year * 100 +
+          a.monthIndex;
+
+        valueB =
+          b.year * 100 +
+          b.monthIndex;
       } else {
-        valA = a[col];
-        valB = b[col];
+        valueA = Number(a[column]) || 0;
+        valueB = Number(b[column]) || 0;
       }
-      return asc ? valA - valB : valB - valA;
+
+      if (valueA === valueB) {
+        return 0;
+      }
+
+      return ascending
+        ? valueA - valueB
+        : valueB - valueA;
     });
 
+    if (list.length === 0) {
+      tableBody.innerHTML = `
+        <tr>
+          <td
+            colspan="5"
+            style="text-align:center;padding:30px;color:var(--bb-text-muted);"
+          >
+            No monthly data available yet.
+          </td>
+        </tr>
+      `;
+
+      return;
+    }
+
     let html = '';
+
     list.forEach(item => {
-      const rateColor = item.savingsPercentage >= 20 ? 'var(--bb-color-income-light)' : '#fbbf24';
-      const savingsColor = item.savings < 0 ? 'var(--bb-color-expense-light)' : '#ffffff';
+      const rateColor =
+        item.savingsPercentage >= 20
+          ? 'var(--bb-color-income-light)'
+          : '#fbbf24';
+
+      const savingsColor =
+        item.savings < 0
+          ? 'var(--bb-color-expense-light)'
+          : '#ffffff';
 
       html += `
         <tr>
-          <td data-label="Month"><strong>${item.monthName}</strong></td>
-          <td data-label="Income" style="color:var(--bb-color-income-light);">${bbAnalyticsFormatCurrency(item.income)}</td>
-          <td data-label="Expenses" style="color:var(--bb-color-expense-light);">${bbAnalyticsFormatCurrency(item.expenses)}</td>
-          <td data-label="Savings" style="color:${savingsColor};">${bbAnalyticsFormatCurrency(item.savings)}</td>
-          <td data-label="Savings %" style="color:${rateColor}; font-weight:700;">${bbAnalyticsFormatPercentage(item.savingsPercentage)}</td>
+          <td data-label="Month">
+            <strong>
+              ${bbAnalyticsEscapeHtml(item.monthName)}
+            </strong>
+          </td>
+
+          <td
+            data-label="Income"
+            style="color:var(--bb-color-income-light);"
+          >
+            ${bbAnalyticsFormatCurrency(item.income)}
+          </td>
+
+          <td
+            data-label="Expenses"
+            style="color:var(--bb-color-expense-light);"
+          >
+            ${bbAnalyticsFormatCurrency(item.expenses)}
+          </td>
+
+          <td
+            data-label="Savings"
+            style="color:${savingsColor};"
+          >
+            ${bbAnalyticsFormatCurrency(item.savings)}
+          </td>
+
+          <td
+            data-label="Savings %"
+            style="color:${rateColor};font-weight:700;"
+          >
+            ${bbAnalyticsFormatPercentage(item.savingsPercentage)}
+          </td>
         </tr>
       `;
     });
@@ -990,227 +2247,717 @@
   }
 
   function bbReportsSetupTableSorting() {
-    const headers = document.querySelectorAll('.bb-report-table th[data-sort]');
-    headers.forEach(th => {
-      th.addEventListener('click', () => {
-        const col = th.getAttribute('data-sort');
-        if (bbAnalyticsState.historySortColumn === col) {
-          bbAnalyticsState.historySortAsc = !bbAnalyticsState.historySortAsc;
-        } else {
-          bbAnalyticsState.historySortColumn = col;
-          bbAnalyticsState.historySortAsc = false;
+    const headers =
+      document.querySelectorAll(
+        '.bb-report-table th[data-sort]'
+      );
+
+    headers.forEach(header => {
+      if (
+        header.dataset.bbSortingBound === 'true'
+      ) {
+        return;
+      }
+
+      header.dataset.bbSortingBound = 'true';
+
+      header.addEventListener(
+        'click',
+        () => {
+          const column =
+            header.getAttribute('data-sort');
+
+          if (
+            bbAnalyticsState.historySortColumn ===
+            column
+          ) {
+            bbAnalyticsState.historySortAsc =
+              !bbAnalyticsState.historySortAsc;
+          } else {
+            bbAnalyticsState.historySortColumn =
+              column;
+
+            bbAnalyticsState.historySortAsc =
+              false;
+          }
+
+          bbReportsRenderHistoryTable();
         }
-        bbReportsRenderHistoryTable();
-      });
+      );
     });
   }
 
   // --------------------------------------------------------------------------
-  // 12. Modal Handlers (New Goal & Add Deposit)
+  // 16. Modal Handlers
   // --------------------------------------------------------------------------
-  let bbActiveDepositGoalId = null;
 
   function bbAnalyticsSetupModals() {
-    // 1. Goal Modal
-    const goalModal = document.getElementById('bb-goal-modal');
-    const openGoalBtn = document.getElementById('bb-btn-open-goal-modal');
-    const closeGoalBtn = document.getElementById('bb-btn-close-goal-modal');
-    const goalForm = document.getElementById('bb-goal-form');
+    const goalModal =
+      document.getElementById(
+        'bb-goal-modal'
+      );
 
-    if (openGoalBtn && goalModal) {
-      openGoalBtn.addEventListener('click', () => goalModal.classList.add('bb-modal-active'));
-    }
-    if (closeGoalBtn && goalModal) {
-      closeGoalBtn.addEventListener('click', () => goalModal.classList.remove('bb-modal-active'));
-    }
-    if (goalForm) {
-      goalForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const name = document.getElementById('bb-input-goal-name').value;
-        const target = document.getElementById('bb-input-goal-target').value;
-        const saved = document.getElementById('bb-input-goal-saved').value;
-        const date = document.getElementById('bb-input-goal-date').value;
+    const openGoalButton =
+      document.getElementById(
+        'bb-btn-open-goal-modal'
+      );
 
-        if (!name || !target || Number(target) <= 0) {
-          alert('Please enter a valid goal name and positive target amount.');
+    const closeGoalButton =
+      document.getElementById(
+        'bb-btn-close-goal-modal'
+      );
+
+    const goalForm =
+      document.getElementById(
+        'bb-goal-form'
+      );
+
+    if (
+      openGoalButton &&
+      goalModal &&
+      openGoalButton.dataset.bbBound !== 'true'
+    ) {
+      openGoalButton.dataset.bbBound = 'true';
+
+      openGoalButton.addEventListener(
+        'click',
+        () => {
+          goalModal.classList.add(
+            'bb-modal-active'
+          );
+        }
+      );
+    }
+
+    if (
+      closeGoalButton &&
+      goalModal &&
+      closeGoalButton.dataset.bbBound !== 'true'
+    ) {
+      closeGoalButton.dataset.bbBound = 'true';
+
+      closeGoalButton.addEventListener(
+        'click',
+        () => {
+          goalModal.classList.remove(
+            'bb-modal-active'
+          );
+        }
+      );
+    }
+
+    if (
+      goalForm &&
+      goalForm.dataset.bbBound !== 'true'
+    ) {
+      goalForm.dataset.bbBound = 'true';
+
+      goalForm.addEventListener(
+        'submit',
+        event => {
+          event.preventDefault();
+
+          const nameElement =
+            document.getElementById(
+              'bb-input-goal-name'
+            );
+
+          const targetElement =
+            document.getElementById(
+              'bb-input-goal-target'
+            );
+
+          const savedElement =
+            document.getElementById(
+              'bb-input-goal-saved'
+            );
+
+          const dateElement =
+            document.getElementById(
+              'bb-input-goal-date'
+            );
+
+          const name =
+            nameElement
+              ? nameElement.value.trim()
+              : '';
+
+          const target =
+            targetElement
+              ? Number(targetElement.value)
+              : 0;
+
+          const saved =
+            savedElement
+              ? Number(savedElement.value) || 0
+              : 0;
+
+          const date =
+            dateElement
+              ? dateElement.value
+              : '';
+
+          if (
+            !name ||
+            !Number.isFinite(target) ||
+            target <= 0
+          ) {
+            alert(
+              'Please enter a valid goal name and positive target amount.'
+            );
+
+            return;
+          }
+
+          bbSavingsCreateGoal({
+            name,
+            targetAmount: target,
+            currentSaved: saved,
+            targetDate: date
+          });
+
+          goalForm.reset();
+
+          if (goalModal) {
+            goalModal.classList.remove(
+              'bb-modal-active'
+            );
+          }
+        }
+      );
+    }
+
+    const depositModal =
+      document.getElementById(
+        'bb-deposit-modal'
+      );
+
+    const closeDepositButton =
+      document.getElementById(
+        'bb-btn-close-deposit-modal'
+      );
+
+    const depositForm =
+      document.getElementById(
+        'bb-deposit-form'
+      );
+
+    if (
+      closeDepositButton &&
+      depositModal &&
+      closeDepositButton.dataset.bbBound !== 'true'
+    ) {
+      closeDepositButton.dataset.bbBound = 'true';
+
+      closeDepositButton.addEventListener(
+        'click',
+        () => {
+          depositModal.classList.remove(
+            'bb-modal-active'
+          );
+
+          bbActiveDepositGoalId = null;
+        }
+      );
+    }
+
+    if (
+      depositForm &&
+      depositForm.dataset.bbBound !== 'true'
+    ) {
+      depositForm.dataset.bbBound = 'true';
+
+      depositForm.addEventListener(
+        'submit',
+        event => {
+          event.preventDefault();
+
+          const amountElement =
+            document.getElementById(
+              'bb-input-deposit-amt'
+            );
+
+          const amount =
+            amountElement
+              ? Number(amountElement.value)
+              : 0;
+
+          if (
+            !Number.isFinite(amount) ||
+            amount <= 0
+          ) {
+            alert(
+              'Please enter a valid deposit amount greater than ₹0.'
+            );
+
+            return;
+          }
+
+          if (
+            bbActiveDepositGoalId !== null
+          ) {
+            bbSavingsAddDeposit(
+              bbActiveDepositGoalId,
+              amount
+            );
+          }
+
+          depositForm.reset();
+
+          if (depositModal) {
+            depositModal.classList.remove(
+              'bb-modal-active'
+            );
+          }
+
+          bbActiveDepositGoalId = null;
+        }
+      );
+    }
+
+    [goalModal, depositModal].forEach(
+      modal => {
+        if (
+          !modal ||
+          modal.dataset.bbBackdropBound ===
+            'true'
+        ) {
           return;
         }
 
-        bbSavingsCreateGoal({
-          name,
-          targetAmount: target,
-          currentSaved: saved,
-          targetDate: date
-        });
+        modal.dataset.bbBackdropBound =
+          'true';
 
-        goalForm.reset();
-        if (goalModal) goalModal.classList.remove('bb-modal-active');
-      });
-    }
+        modal.addEventListener(
+          'click',
+          event => {
+            if (event.target === modal) {
+              modal.classList.remove(
+                'bb-modal-active'
+              );
 
-    // 2. Deposit Modal
-    const depositModal = document.getElementById('bb-deposit-modal');
-    const closeDepositBtn = document.getElementById('bb-btn-close-deposit-modal');
-    const depositForm = document.getElementById('bb-deposit-form');
-
-    if (closeDepositBtn && depositModal) {
-      closeDepositBtn.addEventListener('click', () => depositModal.classList.remove('bb-modal-active'));
-    }
-    if (depositForm) {
-      depositForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const amt = document.getElementById('bb-input-deposit-amt').value;
-        if (!amt || Number(amt) <= 0) {
-          alert('Please enter a valid deposit amount greater than ₹0.');
-          return;
-        }
-
-        if (bbActiveDepositGoalId) {
-          bbSavingsAddDeposit(bbActiveDepositGoalId, amt);
-        }
-        depositForm.reset();
-        if (depositModal) depositModal.classList.remove('bb-modal-active');
-      });
-    }
-
-    // Close on backdrop click & Escape
-    [goalModal, depositModal].forEach(m => {
-      if (m) {
-        m.addEventListener('click', (e) => {
-          if (e.target === m) m.classList.remove('bb-modal-active');
-        });
+              bbActiveDepositGoalId = null;
+            }
+          }
+        );
       }
-    });
-
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (goalModal) goalModal.classList.remove('bb-modal-active');
-        if (depositModal) depositModal.classList.remove('bb-modal-active');
-      }
-    });
+    );
   }
 
   function bbSavingsOpenDepositModal(goalId) {
     bbActiveDepositGoalId = goalId;
-    const modal = document.getElementById('bb-deposit-modal');
-    if (modal) modal.classList.add('bb-modal-active');
+
+    const modal =
+      document.getElementById(
+        'bb-deposit-modal'
+      );
+
+    if (modal) {
+      modal.classList.add(
+        'bb-modal-active'
+      );
+    }
   }
 
   // --------------------------------------------------------------------------
-  // 13. Toast Notification System
+  // 17. Toast Notifications
   // --------------------------------------------------------------------------
-  function bbAnalyticsShowToast(title, message, icon = 'ℹ️') {
-    let container = document.getElementById('bb-toast-container');
+
+  function bbAnalyticsShowToast(
+    title,
+    message,
+    icon = 'ℹ️'
+  ) {
+    let container =
+      document.getElementById(
+        'bb-toast-container'
+      );
+
     if (!container) {
-      container = document.createElement('div');
-      container.id = 'bb-toast-container';
-      container.className = 'bb-toast-container';
-      document.body.appendChild(container);
+      container =
+        document.createElement('div');
+
+      container.id =
+        'bb-toast-container';
+
+      container.className =
+        'bb-toast-container';
+
+      document.body.appendChild(
+        container
+      );
     }
 
-    const toast = document.createElement('div');
-    toast.className = 'bb-toast-message';
-    toast.setAttribute('role', 'alert');
-    toast.innerHTML = `
-      <div class="bb-toast-icon">${icon}</div>
-      <div class="bb-toast-body">
-        <div class="bb-toast-title">${title}</div>
-        <div class="bb-toast-desc">${message}</div>
-      </div>
-      <button type="button" class="bb-toast-close-btn" aria-label="Close notification">&times;</button>
-    `;
+    const toast =
+      document.createElement('div');
 
-    container.appendChild(toast);
-    requestAnimationFrame(() => toast.classList.add('bb-toast-visible'));
+    toast.className =
+      'bb-toast-message';
 
-    const closeBtn = toast.querySelector('.bb-toast-close-btn');
+    toast.setAttribute(
+      'role',
+      'alert'
+    );
+
+    const iconElement =
+      document.createElement('div');
+
+    iconElement.className =
+      'bb-toast-icon';
+
+    iconElement.textContent =
+      icon;
+
+    const bodyElement =
+      document.createElement('div');
+
+    bodyElement.className =
+      'bb-toast-body';
+
+    const titleElement =
+      document.createElement('div');
+
+    titleElement.className =
+      'bb-toast-title';
+
+    titleElement.textContent =
+      String(title || '');
+
+    const messageElement =
+      document.createElement('div');
+
+    messageElement.className =
+      'bb-toast-desc';
+
+    messageElement.textContent =
+      String(message || '');
+
+    const closeButton =
+      document.createElement('button');
+
+    closeButton.type =
+      'button';
+
+    closeButton.className =
+      'bb-toast-close-btn';
+
+    closeButton.setAttribute(
+      'aria-label',
+      'Close notification'
+    );
+
+    closeButton.innerHTML =
+      '&times;';
+
+    bodyElement.appendChild(
+      titleElement
+    );
+
+    bodyElement.appendChild(
+      messageElement
+    );
+
+    toast.appendChild(
+      iconElement
+    );
+
+    toast.appendChild(
+      bodyElement
+    );
+
+    toast.appendChild(
+      closeButton
+    );
+
+    container.appendChild(
+      toast
+    );
+
+    requestAnimationFrame(
+      () => {
+        toast.classList.add(
+          'bb-toast-visible'
+        );
+      }
+    );
+
     const dismiss = () => {
-      toast.classList.remove('bb-toast-visible');
-      setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+      toast.classList.remove(
+        'bb-toast-visible'
+      );
+
+      setTimeout(() => {
+        if (toast.parentNode) {
+          toast.parentNode.removeChild(
+            toast
+          );
+        }
+      }, 300);
     };
 
-    if (closeBtn) closeBtn.addEventListener('click', dismiss);
-    setTimeout(dismiss, 3800);
-  }
+    closeButton.addEventListener(
+      'click',
+      dismiss
+    );
 
-  function escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+    setTimeout(
+      dismiss,
+      3800
+    );
   }
 
   // --------------------------------------------------------------------------
-  // 14. Initialization & Event Bus
+  // 18. Refresh Everything
   // --------------------------------------------------------------------------
-  function bbAnalyticsInit() {
-    // 1. Load Data
-    bbAnalyticsState.transactions = bbAnalyticsGetTransactions();
-    bbAnalyticsState.savingsGoals = bbSavingsGetGoals();
+
+  function bbAnalyticsRefreshAll(
+    showToast = false
+  ) {
+    bbAnalyticsState.transactions =
+      bbAnalyticsGetTransactions();
+
+    bbAnalyticsState.savingsGoals =
+      bbSavingsGetGoals();
+
     bbAnalyticsBuildMonthlySummary();
 
-    // 2. Render Components
     bbAnalyticsRenderKPIs();
+
     bbAnalyticsGenerateInsights();
+
     bbReportsRenderMonthlyReport();
+
     bbReportsRenderHistoryTable();
-    bbReportsSetupTableSorting();
+
     bbSavingsRenderGoals();
-    bbAnalyticsSetupModals();
 
-    // 3. Render Charts
-    setTimeout(() => {
-      bbAnalyticsRenderCharts();
-    }, 150);
+    bbAnalyticsRenderCharts();
 
-    // 4. Listen for external transaction changes
-    window.addEventListener('bb:financial-data-updated', () => {
-      bbAnalyticsState.transactions = bbAnalyticsGetTransactions();
-      bbAnalyticsBuildMonthlySummary();
-      bbAnalyticsRenderKPIs();
-      bbAnalyticsGenerateInsights();
-      bbReportsRenderMonthlyReport();
-      bbReportsRenderHistoryTable();
-      bbAnalyticsRenderCharts();
-      bbAnalyticsShowToast('Analytics Updated', 'New transactions reflected in reports.', '🔄');
-    });
-
-    window.addEventListener('resize', () => {
-      if (typeof window.Chart === 'undefined') {
-        bbAnalyticsRenderFallbackCanvas();
-      }
-    });
+    if (showToast) {
+      bbAnalyticsShowToast(
+        'Analytics Updated',
+        'New transactions are reflected in your analytics.',
+        '🔄'
+      );
+    }
   }
 
   // --------------------------------------------------------------------------
-  // 15. Export Global Public API
+  // 19. Event Bus & Initialization
   // --------------------------------------------------------------------------
+
+  function bbAnalyticsSetupEvents() {
+    if (bbAnalyticsState.eventsBound) {
+      return;
+    }
+
+    bbAnalyticsState.eventsBound = true;
+
+    /**
+     * transactions.js dispatches:
+     *
+     * bb:financial-data-updated
+     *
+     * whenever transaction data changes.
+     */
+    window.addEventListener(
+      'bb:financial-data-updated',
+      () => {
+        bbAnalyticsRefreshAll(true);
+      }
+    );
+
+    /**
+     * Optional direct transaction update event.
+     * This makes Analytics work with future modules too.
+     */
+    window.addEventListener(
+      'bb:transactions-updated',
+      () => {
+        bbAnalyticsRefreshAll(true);
+      }
+    );
+
+    /**
+     * Report month dropdown.
+     */
+    const reportSelect =
+      document.getElementById(
+        'bb-report-month-select'
+      );
+
+    if (
+      reportSelect &&
+      reportSelect.dataset.bbChangeBound !== 'true'
+    ) {
+      reportSelect.dataset.bbChangeBound =
+        'true';
+
+      reportSelect.addEventListener(
+        'change',
+        event => {
+          bbAnalyticsState.activeReportMonthKey =
+            event.target.value;
+
+          bbReportsRenderMonthlyReport();
+
+          bbAnalyticsGenerateInsights();
+
+          bbAnalyticsRenderCharts();
+        }
+      );
+    }
+
+    /**
+     * Escape closes modals.
+     */
+    window.addEventListener(
+      'keydown',
+      event => {
+        if (event.key !== 'Escape') {
+          return;
+        }
+
+        const goalModal =
+          document.getElementById(
+            'bb-goal-modal'
+          );
+
+        const depositModal =
+          document.getElementById(
+            'bb-deposit-modal'
+          );
+
+        if (goalModal) {
+          goalModal.classList.remove(
+            'bb-modal-active'
+          );
+        }
+
+        if (depositModal) {
+          depositModal.classList.remove(
+            'bb-modal-active'
+          );
+        }
+
+        bbActiveDepositGoalId = null;
+      }
+    );
+
+    /**
+     * Canvas fallback redraw on resize.
+     */
+    if (!bbAnalyticsState.resizeBound) {
+      bbAnalyticsState.resizeBound =
+        true;
+
+      window.addEventListener(
+        'resize',
+        () => {
+          if (
+            typeof window.Chart ===
+            'undefined'
+          ) {
+            bbAnalyticsRenderFallbackCanvas();
+          }
+        }
+      );
+    }
+  }
+
+  function bbAnalyticsInit() {
+    if (bbAnalyticsState.initialized) {
+      return;
+    }
+
+    bbAnalyticsState.initialized =
+      true;
+
+    // Load shared data.
+    bbAnalyticsState.transactions =
+      bbAnalyticsGetTransactions();
+
+    bbAnalyticsState.savingsGoals =
+      bbSavingsGetGoals();
+
+    // Build analytics data.
+    bbAnalyticsBuildMonthlySummary();
+
+    // Render page.
+    bbAnalyticsRenderKPIs();
+
+    bbAnalyticsGenerateInsights();
+
+    bbReportsRenderMonthlyReport();
+
+    bbReportsRenderHistoryTable();
+
+    bbReportsSetupTableSorting();
+
+    bbSavingsRenderGoals();
+
+    bbAnalyticsSetupModals();
+
+    bbAnalyticsSetupEvents();
+
+    // Give Chart.js time to load from CDN.
+    setTimeout(
+      () => {
+        bbAnalyticsRenderCharts();
+      },
+      150
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // 20. Public API
+  // --------------------------------------------------------------------------
+
   window.BBAnalytics = {
-    version: '1.0.0',
-    module: 'Developer 3 - Analytics, Savings Goals & Reports',
-    getSummary: () => ({ ...bbAnalyticsState.monthlySummary }),
-    getGoals: bbSavingsGetGoals,
-    createGoal: bbSavingsCreateGoal,
-    deleteGoal: bbSavingsDeleteGoal,
-    addDeposit: bbSavingsAddDeposit,
-    openDepositModal: bbSavingsOpenDepositModal,
-    refresh: () => {
-      bbAnalyticsBuildMonthlySummary();
-      bbAnalyticsRenderKPIs();
-      bbAnalyticsGenerateInsights();
-      bbReportsRenderMonthlyReport();
-      bbReportsRenderHistoryTable();
-      bbAnalyticsRenderCharts();
-      bbSavingsRenderGoals();
+    version: '1.1.0',
+
+    module:
+      'Developer 3 - Analytics, Savings Goals & Reports',
+
+    getSummary: function () {
+      return {
+        ...bbAnalyticsState.monthlySummary
+      };
+    },
+
+    getGoals: function () {
+      return bbSavingsGetGoals();
+    },
+
+    createGoal:
+      bbSavingsCreateGoal,
+
+    deleteGoal:
+      bbSavingsDeleteGoal,
+
+    addDeposit:
+      bbSavingsAddDeposit,
+
+    openDepositModal:
+      bbSavingsOpenDepositModal,
+
+    refresh: function () {
+      bbAnalyticsRefreshAll(false);
     }
   };
 
-  // Run on DOM Ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bbAnalyticsInit);
+  // --------------------------------------------------------------------------
+  // 21. Start
+  // --------------------------------------------------------------------------
+
+  if (
+    document.readyState ===
+    'loading'
+  ) {
+    document.addEventListener(
+      'DOMContentLoaded',
+      bbAnalyticsInit
+    );
   } else {
     bbAnalyticsInit();
   }
