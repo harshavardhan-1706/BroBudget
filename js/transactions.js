@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * BroBudget - Income & Expense Management Module
+ * BroBudget - Income & Expense Management
  * Connected architecture:
  *
  * Transactions → Dashboard → Analytics
@@ -14,9 +14,9 @@
 (function () {
   'use strict';
 
-  // ==========================================================================
-  // 1. CONSTANTS
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 1. Constants
+  // --------------------------------------------------------------------------
 
   const BB_TRANSACTIONS_STORAGE_KEY = 'brobudget_transactions_v1';
   const BB_DASHBOARD_STORAGE_KEY = 'brobudget_financial_data_v1';
@@ -56,15 +56,16 @@
     'December'
   ];
 
-  // ==========================================================================
-  // 2. STATE
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 2. State
+  // --------------------------------------------------------------------------
 
   let bbTransactionsState = {
     transactions: [],
     activeFormType: 'expense',
     editingTransactionId: null,
     pendingDeleteId: null,
+    initialized: false,
     filters: {
       search: '',
       type: 'all',
@@ -74,15 +75,23 @@
     }
   };
 
-  let bbTransactionsInitialized = false;
+  // --------------------------------------------------------------------------
+  // 3. Helpers
+  // --------------------------------------------------------------------------
 
-  // ==========================================================================
-  // 3. DATE HELPERS
-  // ==========================================================================
+  function bbTransactionsEscapeHtml(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
 
-  /**
-   * Safely parses YYYY-MM-DD without browser timezone surprises.
-   */
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function bbTransactionsParseDate(dateString) {
     if (!dateString || typeof dateString !== 'string') {
       return null;
@@ -98,18 +107,6 @@
     const month = Number(match[2]);
     const day = Number(match[3]);
 
-    if (
-      !Number.isInteger(year) ||
-      !Number.isInteger(month) ||
-      !Number.isInteger(day) ||
-      month < 1 ||
-      month > 12 ||
-      day < 1 ||
-      day > 31
-    ) {
-      return null;
-    }
-
     const date = new Date(year, month - 1, day);
 
     if (
@@ -120,26 +117,14 @@
       return null;
     }
 
-    return {
-      year,
-      monthIndex: month - 1,
-      month: month,
-      day,
-      date
-    };
+    return date;
   }
 
-  function bbTransactionsGetMonthKey(dateString) {
-    const parsed = bbTransactionsParseDate(dateString);
-
-    if (!parsed) {
-      return null;
-    }
-
-    return `${parsed.year}-${parsed.monthIndex}`;
+  function bbTransactionsIsValidDate(dateString) {
+    return !!bbTransactionsParseDate(dateString);
   }
 
-  function bbTransactionsGetCurrentDateString() {
+  function bbTransactionsGetTodayString() {
     const today = new Date();
 
     const yyyy = today.getFullYear();
@@ -150,20 +135,42 @@
   }
 
   function bbTransactionsFormatDate(dateString) {
-    const parsed = bbTransactionsParseDate(dateString);
+    const date = bbTransactionsParseDate(dateString);
 
-    if (!parsed) {
+    if (!date) {
       return dateString || '';
     }
 
-    const shortMonth = bbMonthNames[parsed.monthIndex].substring(0, 3);
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = bbMonthNames[date.getMonth()].substring(0, 3);
+    const year = date.getFullYear();
 
-    return `${String(parsed.day).padStart(2, '0')} ${shortMonth} ${parsed.year}`;
+    return `${day} ${month} ${year}`;
   }
 
-  // ==========================================================================
-  // 4. INITIAL SEED
-  // ==========================================================================
+  function bbTransactionsFormatCurrency(amount) {
+    const value = Number(amount) || 0;
+
+    return `₹${Math.abs(value).toLocaleString('en-IN')}`;
+  }
+
+  function bbTransactionsNormalizeType(type) {
+    return type === 'income' ? 'income' : 'expense';
+  }
+
+  function bbTransactionsNormalizeAmount(amount) {
+    const value = Number(amount);
+
+    if (!Number.isFinite(value) || value <= 0) {
+      return 0;
+    }
+
+    return Math.round(value * 100) / 100;
+  }
+
+  // --------------------------------------------------------------------------
+  // 4. Seed Data
+  // --------------------------------------------------------------------------
 
   function bbTransactionsGetInitialSeed() {
     return [
@@ -242,107 +249,288 @@
     ];
   }
 
-  // ==========================================================================
-  // 5. STORAGE
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 5. LocalStorage
+  // --------------------------------------------------------------------------
 
   function bbTransactionsGet() {
     try {
-      const stored = localStorage.getItem(BB_TRANSACTIONS_STORAGE_KEY);
+      const stored = localStorage.getItem(
+        BB_TRANSACTIONS_STORAGE_KEY
+      );
 
-      // IMPORTANT:
-      // If the key exists, even if it contains [], respect that empty state.
-      if (stored !== null) {
-        const parsed = JSON.parse(stored);
-
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
+      /*
+       * Important:
+       * null = first-ever visit → create demo transactions.
+       * []   = user deliberately has no transactions → keep it empty.
+       */
+      if (stored === null) {
+        const seed = bbTransactionsGetInitialSeed();
+        bbTransactionsWriteStorage(seed);
+        return seed;
       }
+
+      const parsed = JSON.parse(stored);
+
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+
+      return [];
     } catch (error) {
       console.warn(
-        'BroBudget: Unable to read transactions from LocalStorage.',
+        'BroBudget: Unable to read transactions.',
         error
       );
+
+      return [];
     }
+  }
 
-    // Only seed when the transaction storage key does not exist
-    // or contains invalid data.
-    const seed = bbTransactionsGetInitialSeed();
-
-    try {
-      localStorage.setItem(
-        BB_TRANSACTIONS_STORAGE_KEY,
-        JSON.stringify(seed)
-      );
-    } catch (error) {
-      console.warn(
-        'BroBudget: Unable to create initial transaction storage.',
-        error
-      );
-    }
-
-    return seed;
+  function bbTransactionsWriteStorage(transactions) {
+    localStorage.setItem(
+      BB_TRANSACTIONS_STORAGE_KEY,
+      JSON.stringify(transactions)
+    );
   }
 
   function bbTransactionsSave(transactions) {
-    if (!Array.isArray(transactions)) {
-      console.error('BroBudget: transactions must be an array.');
-      return false;
-    }
+    const safeTransactions = Array.isArray(transactions)
+      ? transactions
+      : [];
 
     try {
-      localStorage.setItem(
-        BB_TRANSACTIONS_STORAGE_KEY,
-        JSON.stringify(transactions)
-      );
+      bbTransactionsWriteStorage(safeTransactions);
 
-      bbTransactionsState.transactions = transactions.slice();
+      bbTransactionsState.transactions = safeTransactions;
 
-      bbTransactionsSyncWithDashboard(transactions);
+      /*
+       * Dashboard receives the same transaction source.
+       * Analytics also reads the transaction store directly.
+       */
+      bbTransactionsSyncWithDashboard(safeTransactions);
 
       window.dispatchEvent(
         new CustomEvent('bb:transactions-updated', {
           detail: {
-            transactions: transactions.slice(),
-            transactionsCount: transactions.length
+            transactions: safeTransactions,
+            transactionsCount: safeTransactions.length
           }
         })
       );
 
-      return true;
+      window.dispatchEvent(
+        new CustomEvent('bb:financial-data-updated', {
+          detail: {
+            source: 'transactions',
+            transactionsCount: safeTransactions.length
+          }
+        })
+      );
     } catch (error) {
       console.error(
         'BroBudget: Failed to save transactions.',
         error
       );
-
-      return false;
     }
   }
 
-  // ==========================================================================
-  // 6. TRANSACTION CRUD
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 6. Dashboard Synchronization
+  // --------------------------------------------------------------------------
+
+  function bbTransactionsGetDashboardStorage() {
+    try {
+      const stored = localStorage.getItem(
+        BB_DASHBOARD_STORAGE_KEY
+      );
+
+      if (!stored) {
+        return null;
+      }
+
+      const parsed = JSON.parse(stored);
+
+      if (!parsed || typeof parsed !== 'object') {
+        return null;
+      }
+
+      if (!parsed.months || typeof parsed.months !== 'object') {
+        return null;
+      }
+
+      return parsed;
+    } catch (error) {
+      console.warn(
+        'BroBudget: Unable to read dashboard data.',
+        error
+      );
+
+      return null;
+    }
+  }
+
+  function bbTransactionsSyncWithDashboard(transactions) {
+    try {
+      const dashboardData =
+        bbTransactionsGetDashboardStorage();
+
+      if (!dashboardData) {
+        return;
+      }
+
+      const monthlyTotals = {};
+
+      transactions.forEach((transaction) => {
+        if (!transaction || !transaction.date) {
+          return;
+        }
+
+        const parsedDate =
+          bbTransactionsParseDate(transaction.date);
+
+        if (!parsedDate) {
+          return;
+        }
+
+        const year = parsedDate.getFullYear();
+        const month = parsedDate.getMonth();
+
+        const key = `${year}-${month}`;
+
+        if (!monthlyTotals[key]) {
+          monthlyTotals[key] = {
+            income: 0,
+            expenses: 0,
+            categories: {},
+            transactionsCount: 0
+          };
+        }
+
+        const amount =
+          bbTransactionsNormalizeAmount(transaction.amount);
+
+        if (amount <= 0) {
+          return;
+        }
+
+        monthlyTotals[key].transactionsCount += 1;
+
+        if (transaction.type === 'income') {
+          monthlyTotals[key].income += amount;
+        } else {
+          monthlyTotals[key].expenses += amount;
+
+          const category =
+            bbTransactionsCanonicalExpenseCategory(
+              transaction.category
+            );
+
+          monthlyTotals[key].categories[category] =
+            (monthlyTotals[key].categories[category] || 0) +
+            amount;
+        }
+      });
+
+      Object.keys(monthlyTotals).forEach((key) => {
+        if (!dashboardData.months[key]) {
+          return;
+        }
+
+        const totals = monthlyTotals[key];
+        const monthData = dashboardData.months[key];
+
+        monthData.income = totals.income;
+        monthData.expenses = totals.expenses;
+        monthData.savings =
+          totals.income - totals.expenses;
+
+        monthData.savingsPercentage =
+          totals.income > 0
+            ? Number(
+                (
+                  (monthData.savings / totals.income) *
+                  100
+                ).toFixed(1)
+              )
+            : 0;
+
+        monthData.expensePercentage =
+          totals.income > 0
+            ? Number(
+                (
+                  (totals.expenses / totals.income) *
+                  100
+                ).toFixed(1)
+              )
+            : 0;
+
+        monthData.transactionsCount =
+          totals.transactionsCount;
+
+        monthData.categories = totals.categories;
+      });
+
+      localStorage.setItem(
+        BB_DASHBOARD_STORAGE_KEY,
+        JSON.stringify(dashboardData)
+      );
+    } catch (error) {
+      console.warn(
+        'BroBudget: Dashboard synchronization skipped.',
+        error
+      );
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // 7. Category Normalization
+  // --------------------------------------------------------------------------
+
+  function bbTransactionsCanonicalExpenseCategory(
+    category
+  ) {
+    const value = String(category || '')
+      .trim()
+      .toLowerCase();
+
+    const map = {
+      food: 'food',
+      rent: 'rent',
+      housing: 'rent',
+      transport: 'transport',
+      transportation: 'transport',
+      shopping: 'shopping',
+      education: 'education',
+      entertainment: 'entertainment',
+      health: 'health',
+      bills: 'bills',
+      bill: 'bills',
+      utilities: 'bills',
+      other: 'other'
+    };
+
+    return map[value] || 'other';
+  }
+
+  // --------------------------------------------------------------------------
+  // 8. Add / Update / Delete
+  // --------------------------------------------------------------------------
 
   function bbTransactionAdd(transaction) {
     const list = bbTransactionsGet();
 
+    const amount =
+      bbTransactionsNormalizeAmount(transaction.amount);
+
     const newTransaction = {
-      id: Date.now(),
-      type: transaction.type === 'income' ? 'income' : 'expense',
-      category: String(transaction.category || 'Other').trim(),
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      type: bbTransactionsNormalizeType(transaction.type),
+      category: String(transaction.category || 'Other'),
       description: String(transaction.description || '').trim(),
-      amount: Number(transaction.amount),
-      date: String(transaction.date || '')
+      amount,
+      date: transaction.date
     };
-
-    const validation = bbTransactionsValidate(newTransaction);
-
-    if (!validation.isValid) {
-      bbTransactionsShowErrors(validation.errors);
-      return null;
-    }
 
     list.unshift(newTransaction);
 
@@ -351,9 +539,9 @@
 
     bbTransactionsShowToast(
       'Transaction Added',
-      `Successfully recorded ${
-        newTransaction.type
-      } of ₹${newTransaction.amount.toLocaleString('en-IN')}`,
+      `Successfully recorded ${newTransaction.type} of ${bbTransactionsFormatCurrency(
+        newTransaction.amount
+      )}.`,
       '✅'
     );
 
@@ -364,29 +552,33 @@
     const list = bbTransactionsGet();
 
     const index = list.findIndex(
-      transaction => String(transaction.id) === String(id)
+      (transaction) =>
+        String(transaction.id) === String(id)
     );
 
     if (index === -1) {
-      console.error(`Transaction with ID ${id} not found.`);
+      console.error(
+        `Transaction with ID ${id} not found.`
+      );
       return null;
     }
 
     const updatedTransaction = {
       ...list[index],
-      type: updatedData.type === 'income' ? 'income' : 'expense',
-      category: String(updatedData.category || 'Other').trim(),
-      description: String(updatedData.description || '').trim(),
-      amount: Number(updatedData.amount),
-      date: String(updatedData.date || '')
+      type: bbTransactionsNormalizeType(
+        updatedData.type
+      ),
+      category: String(
+        updatedData.category || 'Other'
+      ),
+      description: String(
+        updatedData.description || ''
+      ).trim(),
+      amount: bbTransactionsNormalizeAmount(
+        updatedData.amount
+      ),
+      date: updatedData.date
     };
-
-    const validation = bbTransactionsValidate(updatedTransaction);
-
-    if (!validation.isValid) {
-      bbTransactionsShowErrors(validation.errors);
-      return null;
-    }
 
     list[index] = updatedTransaction;
 
@@ -406,7 +598,8 @@
     const list = bbTransactionsGet();
 
     const target = list.find(
-      transaction => String(transaction.id) === String(id)
+      (transaction) =>
+        String(transaction.id) === String(id)
     );
 
     if (!target) {
@@ -414,7 +607,8 @@
     }
 
     const filtered = list.filter(
-      transaction => String(transaction.id) !== String(id)
+      (transaction) =>
+        String(transaction.id) !== String(id)
     );
 
     bbTransactionsSave(filtered);
@@ -422,28 +616,33 @@
 
     bbTransactionsShowToast(
       'Transaction Deleted',
-      `Removed ${target.category} (${target.type})`,
+      `Removed ${target.category} (${target.type}).`,
       '🗑️'
     );
 
     return true;
   }
 
-  // ==========================================================================
-  // 7. FILTERING
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 9. Filtering
+  // --------------------------------------------------------------------------
 
   function bbTransactionsFilter(criteria = {}) {
-    const list = Array.isArray(bbTransactionsState.transactions)
-      ? bbTransactionsState.transactions
-      : [];
+    const list =
+      bbTransactionsState.transactions ||
+      bbTransactionsGet();
 
-    const search = String(criteria.search || '')
-      .trim()
-      .toLowerCase();
+    const search =
+      String(criteria.search || '')
+        .trim()
+        .toLowerCase();
 
-    const type = criteria.type || 'all';
-    const category = criteria.category || 'all';
+    const type =
+      criteria.type || 'all';
+
+    const category =
+      criteria.category || 'all';
+
     const month =
       criteria.month !== undefined
         ? String(criteria.month)
@@ -454,8 +653,7 @@
         ? String(criteria.year)
         : 'all';
 
-    return list.filter(transaction => {
-      // Type
+    return list.filter((transaction) => {
       if (
         type !== 'all' &&
         transaction.type !== type
@@ -463,7 +661,6 @@
         return false;
       }
 
-      // Category
       if (
         category !== 'all' &&
         transaction.category !== category
@@ -471,42 +668,39 @@
         return false;
       }
 
-      // Date
-      const parsed = bbTransactionsParseDate(transaction.date);
+      const date =
+        bbTransactionsParseDate(transaction.date);
 
-      if (!parsed) {
+      if (!date) {
         return false;
       }
 
-      // Month
       if (
         month !== 'all' &&
-        String(parsed.monthIndex) !== month
+        String(date.getMonth()) !== month
       ) {
         return false;
       }
 
-      // Year
       if (
         year !== 'all' &&
-        String(parsed.year) !== year
+        String(date.getFullYear()) !== year
       ) {
         return false;
       }
 
-      // Search
       if (search) {
-        const categoryText = String(
-          transaction.category || ''
-        ).toLowerCase();
+        const categoryText =
+          String(transaction.category || '')
+            .toLowerCase();
 
-        const descriptionText = String(
-          transaction.description || ''
-        ).toLowerCase();
+        const descriptionText =
+          String(transaction.description || '')
+            .toLowerCase();
 
-        const dateText = String(
-          transaction.date || ''
-        ).toLowerCase();
+        const dateText =
+          String(transaction.date || '')
+            .toLowerCase();
 
         if (
           !categoryText.includes(search) &&
@@ -521,165 +715,9 @@
     });
   }
 
-  // ==========================================================================
-  // 8. DASHBOARD SYNC
-  // ==========================================================================
-
-  /**
-   * Transactions are the source of truth.
-   *
-   * Every save recalculates dashboard monthly income,
-   * expenses and categories directly from transactions.
-   */
-  function bbTransactionsSyncWithDashboard(transactions) {
-    try {
-      const storedDashboard = localStorage.getItem(
-        BB_DASHBOARD_STORAGE_KEY
-      );
-
-      if (!storedDashboard) {
-        return;
-      }
-
-      const dashboardData = JSON.parse(storedDashboard);
-
-      if (
-        !dashboardData ||
-        !dashboardData.months ||
-        typeof dashboardData.months !== 'object'
-      ) {
-        return;
-      }
-
-      const monthlyTotals = {};
-
-      transactions.forEach(transaction => {
-        if (!transaction || !transaction.date) {
-          return;
-        }
-
-        const parsed = bbTransactionsParseDate(
-          transaction.date
-        );
-
-        if (!parsed) {
-          return;
-        }
-
-        const amount = Number(transaction.amount);
-
-        if (!Number.isFinite(amount) || amount <= 0) {
-          return;
-        }
-
-        const key = `${parsed.year}-${parsed.monthIndex}`;
-
-        if (!monthlyTotals[key]) {
-          monthlyTotals[key] = {
-            income: 0,
-            expenses: 0,
-            categories: {}
-          };
-        }
-
-        const type = String(
-          transaction.type || ''
-        ).toLowerCase();
-
-        if (type === 'income') {
-          monthlyTotals[key].income += amount;
-          return;
-        }
-
-        if (type === 'expense') {
-          monthlyTotals[key].expenses += amount;
-
-          const category = bbTransactionsNormalizeCategory(
-            transaction.category
-          );
-
-          monthlyTotals[key].categories[category] =
-            (monthlyTotals[key].categories[category] || 0) +
-            amount;
-        }
-      });
-
-      /*
-       * First clear existing transaction-driven months.
-       *
-       * This is important when a user deletes the final transaction
-       * from a month. Without clearing, old dashboard values would remain.
-       */
-      Object.keys(dashboardData.months).forEach(key => {
-        const month = dashboardData.months[key];
-
-        if (!month) {
-          return;
-        }
-
-        month.income = 0;
-        month.expenses = 0;
-        month.categories = {};
-      });
-
-      /*
-       * Apply calculated transaction totals.
-       *
-       * Existing dashboard month objects are preserved so other
-       * dashboard metadata remains intact.
-       */
-      Object.keys(monthlyTotals).forEach(key => {
-        if (!dashboardData.months[key]) {
-          return;
-        }
-
-        dashboardData.months[key].income =
-          monthlyTotals[key].income;
-
-        dashboardData.months[key].expenses =
-          monthlyTotals[key].expenses;
-
-        dashboardData.months[key].categories =
-          monthlyTotals[key].categories;
-      });
-
-      localStorage.setItem(
-        BB_DASHBOARD_STORAGE_KEY,
-        JSON.stringify(dashboardData)
-      );
-
-      window.dispatchEvent(
-        new CustomEvent('bb:financial-data-updated', {
-          detail: {
-            source: 'transactions',
-            transactionsCount: transactions.length
-          }
-        })
-      );
-    } catch (error) {
-      console.warn(
-        'BroBudget: Dashboard sync skipped.',
-        error
-      );
-    }
-  }
-
-  function bbTransactionsNormalizeCategory(category) {
-    const value = String(category || '')
-      .trim()
-      .toLowerCase();
-
-    const aliases = {
-      housing: 'rent',
-      utilities: 'bills'
-    };
-
-    return aliases[value] || value || 'other';
-  }
-
-  // ==========================================================================
-  // 9. VALIDATION
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 10. Validation
+  // --------------------------------------------------------------------------
 
   function bbTransactionsValidate(formData) {
     const errors = {};
@@ -691,31 +729,39 @@
       amountValue === null ||
       amountValue === undefined
     ) {
-      errors.amount = 'Please enter a valid amount.';
+      errors.amount =
+        'Please enter a valid amount.';
     } else {
-      const number = Number(amountValue);
+      const amount = Number(amountValue);
 
-      if (!Number.isFinite(number)) {
-        errors.amount = 'Amount must be a numeric value.';
-      } else if (number <= 0) {
-        errors.amount = 'Amount must be greater than ₹0.';
+      if (!Number.isFinite(amount)) {
+        errors.amount =
+          'Amount must be a numeric value.';
+      } else if (amount <= 0) {
+        errors.amount =
+          'Amount must be greater than ₹0.';
       }
     }
 
     if (
       !formData.category ||
-      String(formData.category).trim() === ''
+      !String(formData.category).trim()
     ) {
-      errors.category = 'Please select a category.';
+      errors.category =
+        'Please select a category.';
     }
 
     if (
       !formData.date ||
-      String(formData.date).trim() === ''
+      !String(formData.date).trim()
     ) {
-      errors.date = 'Please choose a transaction date.';
-    } else if (!bbTransactionsParseDate(formData.date)) {
-      errors.date = 'Please enter a valid date.';
+      errors.date =
+        'Please choose a transaction date.';
+    } else if (
+      !bbTransactionsIsValidDate(formData.date)
+    ) {
+      errors.date =
+        'Please enter a valid date.';
     }
 
     return {
@@ -732,36 +778,39 @@
       'description'
     ];
 
-    fields.forEach(field => {
-      const input = document.getElementById(
-        `bb-input-${field}`
-      );
+    fields.forEach((field) => {
+      const input =
+        document.getElementById(
+          `bb-input-${field}`
+        );
 
-      const error = document.getElementById(
-        `bb-error-${field}`
-      );
+      const error =
+        document.getElementById(
+          `bb-error-${field}`
+        );
 
       if (input) {
         input.classList.toggle(
           'bb-input-error',
-          Boolean(errors[field])
+          !!errors[field]
         );
       }
 
       if (error) {
-        error.textContent = errors[field] || '';
+        error.textContent =
+          errors[field] || '';
 
         error.classList.toggle(
           'bb-error-visible',
-          Boolean(errors[field])
+          !!errors[field]
         );
       }
     });
   }
 
-  // ==========================================================================
-  // 10. CATEGORY HELPERS
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 11. Category Dropdowns
+  // --------------------------------------------------------------------------
 
   function bbTransactionsGetCategoryList(type) {
     return type === 'income'
@@ -773,41 +822,62 @@
     categoryName,
     type
   ) {
-    const list = bbTransactionsGetCategoryList(type);
+    const list =
+      bbTransactionsGetCategoryList(type);
+
+    const target =
+      String(categoryName || '')
+        .toLowerCase();
 
     const match = list.find(
-      category =>
-        category.name.toLowerCase() ===
-        String(categoryName || '').toLowerCase()
+      (category) =>
+        category.name.toLowerCase() === target
     );
 
     if (match) {
       return match.icon;
     }
 
-    return type === 'income' ? '💰' : '📦';
+    return type === 'income'
+      ? '💰'
+      : '📦';
   }
 
   function bbTransactionsPopulateCategoryDropdown(
     type,
     selectedCategory = ''
   ) {
-    const select = document.getElementById(
-      'bb-input-category'
-    );
+    const select =
+      document.getElementById(
+        'bb-input-category'
+      );
 
     if (!select) {
       return;
     }
 
-    select.innerHTML =
-      '<option value="" disabled>Select a category...</option>';
+    select.innerHTML = '';
+
+    const placeholder =
+      document.createElement('option');
+
+    placeholder.value = '';
+    placeholder.textContent =
+      'Select a category...';
+    placeholder.disabled = true;
+
+    if (!selectedCategory) {
+      placeholder.selected = true;
+    }
+
+    select.appendChild(placeholder);
 
     const categories =
       bbTransactionsGetCategoryList(type);
 
-    categories.forEach(category => {
-      const option = document.createElement('option');
+    categories.forEach((category) => {
+      const option =
+        document.createElement('option');
 
       option.value = category.name;
       option.textContent =
@@ -823,16 +893,13 @@
 
       select.appendChild(option);
     });
-
-    if (!selectedCategory) {
-      select.selectedIndex = 0;
-    }
   }
 
   function bbTransactionsPopulateFilterCategoryDropdown() {
-    const select = document.getElementById(
-      'bb-filter-category'
-    );
+    const select =
+      document.getElementById(
+        'bb-filter-category'
+      );
 
     if (!select) {
       return;
@@ -844,10 +911,12 @@
     const incomeGroup =
       document.createElement('optgroup');
 
-    incomeGroup.label = 'Income Sources';
+    incomeGroup.label =
+      'Income Sources';
 
-    bbIncomeSources.forEach(category => {
-      const option = document.createElement('option');
+    bbIncomeSources.forEach((category) => {
+      const option =
+        document.createElement('option');
 
       option.value = category.name;
       option.textContent =
@@ -861,10 +930,12 @@
     const expenseGroup =
       document.createElement('optgroup');
 
-    expenseGroup.label = 'Expense Categories';
+    expenseGroup.label =
+      'Expense Categories';
 
-    bbExpenseCategories.forEach(category => {
-      const option = document.createElement('option');
+    bbExpenseCategories.forEach((category) => {
+      const option =
+        document.createElement('option');
 
       option.value = category.name;
       option.textContent =
@@ -876,9 +947,9 @@
     select.appendChild(expenseGroup);
   }
 
-  // ==========================================================================
-  // 11. RENDERING
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 12. Rendering
+  // --------------------------------------------------------------------------
 
   function bbTransactionsRender() {
     const filteredList =
@@ -886,48 +957,31 @@
         bbTransactionsState.filters
       );
 
-    const tableBody =
-      document.getElementById('bb-table-body');
-
-    const emptyState =
-      document.getElementById(
-        'bb-table-empty-state'
-      );
-
-    const table =
-      document.getElementById(
-        'bb-transactions-table'
-      );
-
-    // ------------------------------------------------------------------------
-    // Metrics
-    // ------------------------------------------------------------------------
-
     let totalIncome = 0;
     let totalExpenses = 0;
 
-    filteredList.forEach(transaction => {
-      const amount = Number(transaction.amount);
-
-      if (!Number.isFinite(amount)) {
-        return;
-      }
+    filteredList.forEach((transaction) => {
+      const amount =
+        bbTransactionsNormalizeAmount(
+          transaction.amount
+        );
 
       if (transaction.type === 'income') {
         totalIncome += amount;
-      } else if (transaction.type === 'expense') {
+      } else {
         totalExpenses += amount;
       }
     });
 
-    const net = totalIncome - totalExpenses;
+    const netBalance =
+      totalIncome - totalExpenses;
 
-    const miniInflow =
+    const miniIncome =
       document.getElementById(
         'bb-mini-inflow-val'
       );
 
-    const miniOutflow =
+    const miniExpenses =
       document.getElementById(
         'bb-mini-outflow-val'
       );
@@ -942,36 +996,51 @@
         'bb-mini-count-val'
       );
 
-    if (miniInflow) {
-      miniInflow.textContent =
-        `₹${totalIncome.toLocaleString('en-IN')}`;
+    if (miniIncome) {
+      miniIncome.textContent =
+        bbTransactionsFormatCurrency(
+          totalIncome
+        );
     }
 
-    if (miniOutflow) {
-      miniOutflow.textContent =
-        `₹${totalExpenses.toLocaleString('en-IN')}`;
+    if (miniExpenses) {
+      miniExpenses.textContent =
+        bbTransactionsFormatCurrency(
+          totalExpenses
+        );
     }
 
     if (miniNet) {
-      const prefix = net < 0 ? '-₹' : '₹';
-
       miniNet.textContent =
-        `${prefix}${Math.abs(net).toLocaleString('en-IN')}`;
+        `${netBalance < 0 ? '-₹' : '₹'}${Math.abs(
+          netBalance
+        ).toLocaleString('en-IN')}`;
 
       miniNet.style.color =
-        net < 0
+        netBalance < 0
           ? 'var(--bb-color-expense-light)'
           : 'var(--bb-color-income-light)';
     }
 
     if (miniCount) {
       miniCount.textContent =
-        String(filteredList.length);
+        filteredList.length;
     }
 
-    // ------------------------------------------------------------------------
-    // Table
-    // ------------------------------------------------------------------------
+    const tableBody =
+      document.getElementById(
+        'bb-table-body'
+      );
+
+    const emptyState =
+      document.getElementById(
+        'bb-table-empty-state'
+      );
+
+    const table =
+      document.getElementById(
+        'bb-transactions-table'
+      );
 
     if (!tableBody) {
       return;
@@ -999,145 +1068,122 @@
       table.style.display = 'table';
     }
 
-    let html = '';
+    const html =
+      filteredList.map((transaction) => {
+        const isIncome =
+          transaction.type === 'income';
 
-    filteredList.forEach(transaction => {
-      const isIncome =
-        transaction.type === 'income';
+        const icon =
+          bbTransactionsGetCategoryIcon(
+            transaction.category,
+            transaction.type
+          );
 
-      const icon =
-        bbTransactionsGetCategoryIcon(
-          transaction.category,
-          transaction.type
-        );
+        const amount =
+          bbTransactionsNormalizeAmount(
+            transaction.amount
+          );
 
-      const formattedDate =
-        bbTransactionsFormatDate(
-          transaction.date
-        );
+        const description =
+          bbTransactionsEscapeHtml(
+            transaction.description || '—'
+          );
 
-      const typeClass = isIncome
-        ? 'bb-badge-type-income'
-        : 'bb-badge-type-expense';
+        const category =
+          bbTransactionsEscapeHtml(
+            transaction.category || 'Other'
+          );
 
-      const amountClass = isIncome
-        ? 'bb-amount-income'
-        : 'bb-amount-expense';
+        const formattedDate =
+          bbTransactionsFormatDate(
+            transaction.date
+          );
 
-      const amountPrefix = isIncome
-        ? '+₹'
-        : '-₹';
+        return `
+          <tr
+            class="bb-row-enter"
+            id="bb-tx-row-${bbTransactionsEscapeHtml(
+              transaction.id
+            )}"
+          >
+            <td data-label="Date">
+              <span style="font-weight:600;color:var(--bb-text-secondary);">
+                ${formattedDate}
+              </span>
+            </td>
 
-      const amount =
-        Number(transaction.amount) || 0;
+            <td data-label="Type">
+              <span class="bb-table-badge-type ${
+                isIncome
+                  ? 'bb-badge-type-income'
+                  : 'bb-badge-type-expense'
+              }">
+                ${isIncome ? '💰 Inflow' : '💸 Outflow'}
+              </span>
+            </td>
 
-      const description =
-        transaction.description || '—';
+            <td data-label="Category">
+              <span class="bb-table-badge-cat">
+                <span>${icon}</span>
+                <span>${category}</span>
+              </span>
+            </td>
 
-      const safeDescription =
-        bbTransactionsEscapeHtml(
-          description
-        );
+            <td data-label="Description">
+              <span style="color:var(--bb-text-primary);font-weight:500;">
+                ${description}
+              </span>
+            </td>
 
-      const safeCategory =
-        bbTransactionsEscapeHtml(
-          transaction.category
-        );
+            <td data-label="Amount">
+              <span class="bb-table-amount ${
+                isIncome
+                  ? 'bb-amount-income'
+                  : 'bb-amount-expense'
+              }">
+                ${isIncome ? '+' : '-'}₹${amount.toLocaleString(
+                  'en-IN'
+                )}
+              </span>
+            </td>
 
-      html += `
-        <tr
-          class="bb-row-enter"
-          id="bb-tx-row-${transaction.id}"
-        >
-          <td data-label="Date">
-            <span
-              style="
-                font-weight:600;
-                color:var(--bb-text-secondary);
-              "
-            >
-              ${formattedDate}
-            </span>
-          </td>
+            <td data-label="Actions">
+              <div class="bb-table-actions">
+                <button
+                  type="button"
+                  class="bb-table-btn-action bb-table-btn-edit"
+                  title="Edit Transaction"
+                  aria-label="Edit transaction"
+                  onclick="window.BBTransactions.openEdit(${JSON.stringify(
+                    transaction.id
+                  )})"
+                >
+                  ✏️
+                </button>
 
-          <td data-label="Type">
-            <span
-              class="bb-table-badge-type ${typeClass}"
-            >
-              ${isIncome ? '💰 Inflow' : '💸 Outflow'}
-            </span>
-          </td>
-
-          <td data-label="Category">
-            <span class="bb-table-badge-cat">
-              <span>${icon}</span>
-              <span>${safeCategory}</span>
-            </span>
-          </td>
-
-          <td data-label="Description">
-            <span
-              style="
-                color:var(--bb-text-primary);
-                font-weight:500;
-              "
-            >
-              ${safeDescription}
-            </span>
-          </td>
-
-          <td data-label="Amount">
-            <span
-              class="bb-table-amount ${amountClass}"
-            >
-              ${amountPrefix}${amount.toLocaleString('en-IN')}
-            </span>
-          </td>
-
-          <td data-label="Actions">
-            <div class="bb-table-actions">
-
-              <button
-                type="button"
-                class="bb-table-btn-action bb-table-btn-edit"
-                title="Edit Transaction"
-                aria-label="Edit transaction"
-                onclick="window.BBTransactions.openEdit(${Number(transaction.id)})"
-              >
-                ✏️
-              </button>
-
-              <button
-                type="button"
-                class="bb-table-btn-action bb-table-btn-delete"
-                title="Delete Transaction"
-                aria-label="Delete transaction"
-                onclick="window.BBTransactions.openDelete(${Number(transaction.id)})"
-              >
-                🗑️
-              </button>
-
-            </div>
-          </td>
-        </tr>
-      `;
-    });
+                <button
+                  type="button"
+                  class="bb-table-btn-action bb-table-btn-delete"
+                  title="Delete Transaction"
+                  aria-label="Delete transaction"
+                  onclick="window.BBTransactions.openDelete(${JSON.stringify(
+                    transaction.id
+                  )})"
+                >
+                  🗑️
+                </button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
 
     tableBody.innerHTML = html;
   }
 
-  function bbTransactionsEscapeHtml(value) {
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  // ==========================================================================
-  // 12. FORM
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 13. Form Type Switching
+  // --------------------------------------------------------------------------
 
   function bbTransactionsSwitchFormType(type) {
     const normalizedType =
@@ -1163,15 +1209,13 @@
         'bb-form-title-text'
       );
 
-    const submit =
+    const submitButton =
       document.getElementById(
         'bb-form-submit-btn'
       );
 
     const editing =
-      Boolean(
-        bbTransactionsState.editingTransactionId
-      );
+      !!bbTransactionsState.editingTransactionId;
 
     if (normalizedType === 'income') {
       if (incomeButton) {
@@ -1191,11 +1235,11 @@
             : 'Record Income';
       }
 
-      if (submit) {
-        submit.className =
+      if (submitButton) {
+        submitButton.className =
           'bb-form-submit-btn bb-submit-income';
 
-        submit.textContent =
+        submitButton.textContent =
           editing
             ? 'Update Income'
             : 'Add Income';
@@ -1218,11 +1262,11 @@
             : 'Record Expense';
       }
 
-      if (submit) {
-        submit.className =
+      if (submitButton) {
+        submitButton.className =
           'bb-form-submit-btn bb-submit-expense';
 
-        submit.textContent =
+        submitButton.textContent =
           editing
             ? 'Update Expense'
             : 'Add Expense';
@@ -1235,6 +1279,10 @@
 
     bbTransactionsShowErrors({});
   }
+
+  // --------------------------------------------------------------------------
+  // 14. Form Submit
+  // --------------------------------------------------------------------------
 
   function bbTransactionsHandleFormSubmit(event) {
     event.preventDefault();
@@ -1259,35 +1307,33 @@
         'bb-input-amount'
       );
 
+    if (
+      !dateInput ||
+      !categoryInput ||
+      !descriptionInput ||
+      !amountInput
+    ) {
+      return;
+    }
+
     const formData = {
       type:
         bbTransactionsState.activeFormType,
 
-      date:
-        dateInput
-          ? dateInput.value
-          : '',
+      date: dateInput.value,
 
       category:
-        categoryInput
-          ? categoryInput.value
-          : '',
+        categoryInput.value,
 
       description:
-        descriptionInput
-          ? descriptionInput.value.trim()
-          : '',
+        descriptionInput.value.trim(),
 
       amount:
-        amountInput
-          ? amountInput.value
-          : ''
+        amountInput.value
     };
 
     const validation =
-      bbTransactionsValidate(
-        formData
-      );
+      bbTransactionsValidate(formData);
 
     if (!validation.isValid) {
       bbTransactionsShowErrors(
@@ -1316,38 +1362,29 @@
     if (
       bbTransactionsState.editingTransactionId
     ) {
-      const updated =
-        bbTransactionUpdate(
-          bbTransactionsState.editingTransactionId,
-          formData
-        );
+      bbTransactionUpdate(
+        bbTransactionsState.editingTransactionId,
+        formData
+      );
 
-      if (updated) {
-        bbTransactionsCancelEdit();
-      }
-
-      return;
-    }
-
-    const added =
+      bbTransactionsCancelEdit();
+    } else {
       bbTransactionAdd(formData);
 
-    if (!added) {
-      return;
-    }
-
-    if (amountInput) {
       amountInput.value = '';
-    }
-
-    if (descriptionInput) {
       descriptionInput.value = '';
-    }
 
-    if (categoryInput) {
-      categoryInput.selectedIndex = 0;
+      if (categoryInput) {
+        categoryInput.selectedIndex = 0;
+      }
+
+      amountInput.focus();
     }
   }
+
+  // --------------------------------------------------------------------------
+  // 15. Edit
+  // --------------------------------------------------------------------------
 
   function bbTransactionsOpenEdit(id) {
     const list =
@@ -1355,7 +1392,7 @@
 
     const target =
       list.find(
-        transaction =>
+        (transaction) =>
           String(transaction.id) ===
           String(id)
       );
@@ -1393,18 +1430,13 @@
 
     if (dateInput) {
       dateInput.value =
-        target.date;
+        target.date || '';
     }
 
     bbTransactionsPopulateCategoryDropdown(
       target.type,
       target.category
     );
-
-    if (categoryInput) {
-      categoryInput.value =
-        target.category;
-    }
 
     if (descriptionInput) {
       descriptionInput.value =
@@ -1413,7 +1445,7 @@
 
     if (amountInput) {
       amountInput.value =
-        target.amount;
+        target.amount || '';
     }
 
     const banner =
@@ -1487,12 +1519,25 @@
         'bb-input-description'
       );
 
+    const dateInput =
+      document.getElementById(
+        'bb-input-date'
+      );
+
     if (amountInput) {
       amountInput.value = '';
     }
 
     if (descriptionInput) {
       descriptionInput.value = '';
+    }
+
+    if (
+      dateInput &&
+      !dateInput.value
+    ) {
+      dateInput.value =
+        bbTransactionsGetTodayString();
     }
 
     bbTransactionsSwitchFormType(
@@ -1502,9 +1547,9 @@
     bbTransactionsShowErrors({});
   }
 
-  // ==========================================================================
-  // 13. DELETE MODAL
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 16. Delete Modal
+  // --------------------------------------------------------------------------
 
   function bbTransactionsOpenDeleteModal(id) {
     const list =
@@ -1512,7 +1557,7 @@
 
     const target =
       list.find(
-        transaction =>
+        (transaction) =>
           String(transaction.id) ===
           String(id)
       );
@@ -1522,12 +1567,7 @@
     }
 
     bbTransactionsState.pendingDeleteId =
-      id;
-
-    const modal =
-      document.getElementById(
-        'bb-delete-modal'
-      );
+      target.id;
 
     const details =
       document.getElementById(
@@ -1535,8 +1575,10 @@
       );
 
     if (details) {
-      const amount =
-        Number(target.amount) || 0;
+      const safeType =
+        target.type === 'income'
+          ? 'INCOME'
+          : 'EXPENSE';
 
       const safeCategory =
         bbTransactionsEscapeHtml(
@@ -1549,24 +1591,28 @@
         );
 
       details.innerHTML = `
-        <strong>${String(target.type).toUpperCase()}:</strong>
-        ₹${amount.toLocaleString('en-IN')}
-        <br>
+        <strong>${safeType}:</strong>
+        ${bbTransactionsFormatCurrency(
+          target.amount
+        )}<br>
 
         <strong>Category:</strong>
         ${safeCategory}
-
         |
-
         <strong>Date:</strong>
-        ${bbTransactionsFormatDate(target.date)}
-
-        <br>
+        ${bbTransactionsFormatDate(
+          target.date
+        )}<br>
 
         <strong>Description:</strong>
         ${safeDescription}
       `;
     }
+
+    const modal =
+      document.getElementById(
+        'bb-delete-modal'
+      );
 
     if (modal) {
       modal.classList.add(
@@ -1622,9 +1668,9 @@
     }
   }
 
-  // ==========================================================================
-  // 14. FILTER SETUP
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 17. Filters
+  // --------------------------------------------------------------------------
 
   function bbTransactionsSetupFilters() {
     const searchInput =
@@ -1640,7 +1686,7 @@
     if (searchInput) {
       searchInput.addEventListener(
         'input',
-        event => {
+        (event) => {
           bbTransactionsState.filters.search =
             event.target.value;
 
@@ -1662,39 +1708,36 @@
         () => {
           if (searchInput) {
             searchInput.value = '';
-          }
 
-          bbTransactionsState.filters.search =
-            '';
+            bbTransactionsState.filters.search =
+              '';
 
-          searchClear.classList.remove(
-            'bb-clear-visible'
-          );
+            searchClear.classList.remove(
+              'bb-clear-visible'
+            );
 
-          bbTransactionsRender();
-
-          if (searchInput) {
+            bbTransactionsRender();
             searchInput.focus();
           }
         }
       );
     }
 
-    // Type buttons
     const typeButtons =
       document.querySelectorAll(
         '.bb-filter-type-btn'
       );
 
-    typeButtons.forEach(button => {
+    typeButtons.forEach((button) => {
       button.addEventListener(
         'click',
         () => {
-          typeButtons.forEach(item => {
-            item.classList.remove(
-              'bb-filter-type-active'
-            );
-          });
+          typeButtons.forEach(
+            (item) =>
+              item.classList.remove(
+                'bb-filter-type-active'
+              )
+          );
 
           button.classList.add(
             'bb-filter-type-active'
@@ -1710,7 +1753,6 @@
       );
     });
 
-    // Category
     const categoryFilter =
       document.getElementById(
         'bb-filter-category'
@@ -1719,7 +1761,7 @@
     if (categoryFilter) {
       categoryFilter.addEventListener(
         'change',
-        event => {
+        (event) => {
           bbTransactionsState.filters.category =
             event.target.value;
 
@@ -1728,7 +1770,6 @@
       );
     }
 
-    // Month
     const monthFilter =
       document.getElementById(
         'bb-filter-month'
@@ -1745,7 +1786,7 @@
               'option'
             );
 
-          option.value = index;
+          option.value = String(index);
           option.textContent = month;
 
           monthFilter.appendChild(
@@ -1756,7 +1797,7 @@
 
       monthFilter.addEventListener(
         'change',
-        event => {
+        (event) => {
           bbTransactionsState.filters.month =
             event.target.value;
 
@@ -1765,7 +1806,6 @@
       );
     }
 
-    // Reset
     const resetButton =
       document.getElementById(
         'bb-btn-reset-filters'
@@ -1793,21 +1833,28 @@
             );
           }
 
-          typeButtons.forEach(button => {
-            button.classList.toggle(
-              'bb-filter-type-active',
-              button.getAttribute(
-                'data-type'
-              ) === 'all'
-            );
-          });
+          typeButtons.forEach(
+            (button) => {
+              const buttonType =
+                button.getAttribute(
+                  'data-type'
+                ) || 'all';
+
+              button.classList.toggle(
+                'bb-filter-type-active',
+                buttonType === 'all'
+              );
+            }
+          );
 
           if (categoryFilter) {
-            categoryFilter.value = 'all';
+            categoryFilter.value =
+              'all';
           }
 
           if (monthFilter) {
-            monthFilter.value = 'all';
+            monthFilter.value =
+              'all';
           }
 
           bbTransactionsRender();
@@ -1822,9 +1869,9 @@
     }
   }
 
-  // ==========================================================================
-  // 15. TOAST
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 18. Toast
+  // --------------------------------------------------------------------------
 
   function bbTransactionsShowToast(
     title,
@@ -1868,8 +1915,7 @@
     iconElement.className =
       'bb-toast-icon';
 
-    iconElement.textContent =
-      icon;
+    iconElement.textContent = icon;
 
     const body =
       document.createElement('div');
@@ -1884,7 +1930,7 @@
       'bb-toast-title';
 
     titleElement.textContent =
-      title;
+      title || '';
 
     const messageElement =
       document.createElement('div');
@@ -1893,19 +1939,24 @@
       'bb-toast-desc';
 
     messageElement.textContent =
-      message;
+      message || '';
 
     const closeButton =
       document.createElement('button');
 
-    closeButton.type = 'button';
+    closeButton.type =
+      'button';
+
     closeButton.className =
       'bb-toast-close-btn';
+
     closeButton.setAttribute(
       'aria-label',
       'Close notification'
     );
-    closeButton.innerHTML = '&times;';
+
+    closeButton.innerHTML =
+      '&times;';
 
     body.appendChild(
       titleElement
@@ -1970,61 +2021,23 @@
     );
   }
 
-  // ==========================================================================
-  // 16. CROSS-TAB STORAGE SYNC
-  // ==========================================================================
-
-  function bbTransactionsSetupStorageSync() {
-    window.addEventListener(
-      'storage',
-      event => {
-        if (
-          event.key !==
-          BB_TRANSACTIONS_STORAGE_KEY
-        ) {
-          return;
-        }
-
-        try {
-          const parsed =
-            event.newValue
-              ? JSON.parse(
-                  event.newValue
-                )
-              : [];
-
-          if (Array.isArray(parsed)) {
-            bbTransactionsState.transactions =
-              parsed;
-
-            bbTransactionsRender();
-          }
-        } catch (error) {
-          console.warn(
-            'BroBudget: Unable to sync transaction storage event.',
-            error
-          );
-        }
-      }
-    );
-  }
-
-  // ==========================================================================
-  // 17. INITIALIZATION
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 19. Initialization
+  // --------------------------------------------------------------------------
 
   function bbTransactionsInit() {
-    if (bbTransactionsInitialized) {
+    if (
+      bbTransactionsState.initialized
+    ) {
       return;
     }
 
-    bbTransactionsInitialized = true;
+    bbTransactionsState.initialized =
+      true;
 
-    // Load transactions
     bbTransactionsState.transactions =
       bbTransactionsGet();
 
-    // Default date
     const dateInput =
       document.getElementById(
         'bb-input-date'
@@ -2035,23 +2048,17 @@
       !dateInput.value
     ) {
       dateInput.value =
-        bbTransactionsGetCurrentDateString();
+        bbTransactionsGetTodayString();
     }
 
-    // Dropdowns
     bbTransactionsPopulateCategoryDropdown(
       bbTransactionsState.activeFormType
     );
 
     bbTransactionsPopulateFilterCategoryDropdown();
 
-    // Filters
     bbTransactionsSetupFilters();
 
-    // Storage sync
-    bbTransactionsSetupStorageSync();
-
-    // Form switch buttons
     const expenseButton =
       document.getElementById(
         'bb-switch-btn-expense'
@@ -2082,7 +2089,6 @@
       );
     }
 
-    // Form submit
     const form =
       document.getElementById(
         'bb-transaction-form'
@@ -2095,7 +2101,6 @@
       );
     }
 
-    // Cancel edit
     const cancelButton =
       document.getElementById(
         'bb-form-cancel-btn'
@@ -2108,7 +2113,6 @@
       );
     }
 
-    // Delete modal
     const confirmDelete =
       document.getElementById(
         'bb-modal-btn-confirm-delete'
@@ -2141,7 +2145,7 @@
     if (modal) {
       modal.addEventListener(
         'click',
-        event => {
+        (event) => {
           if (
             event.target === modal
           ) {
@@ -2151,10 +2155,12 @@
       );
     }
 
-    // Escape
+    /*
+     * Escape closes the delete modal.
+     */
     window.addEventListener(
       'keydown',
-      event => {
+      (event) => {
         if (event.key !== 'Escape') {
           return;
         }
@@ -2169,17 +2175,34 @@
       }
     );
 
-    // Initial render
+    /*
+     * If another page/tab changes the transaction store,
+     * refresh this page.
+     */
+    window.addEventListener(
+      'storage',
+      (event) => {
+        if (
+          event.key ===
+          BB_TRANSACTIONS_STORAGE_KEY
+        ) {
+          bbTransactionsState.transactions =
+            bbTransactionsGet();
+
+          bbTransactionsRender();
+        }
+      }
+    );
+
     bbTransactionsRender();
   }
 
-  // ==========================================================================
-  // 18. PUBLIC API
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 20. Public API
+  // --------------------------------------------------------------------------
 
   window.BBTransactions = {
     version: '2.0.0',
-
     module:
       'Income & Expense Management',
 
@@ -2216,14 +2239,19 @@
     switchType:
       bbTransactionsSwitchFormType,
 
-    getState: () => ({
-      ...bbTransactionsState,
-      transactions:
-        bbTransactionsState.transactions.slice()
-    })
+    getState:
+      () => ({
+        ...bbTransactionsState,
+        filters: {
+          ...bbTransactionsState.filters
+        },
+        transactions: [
+          ...bbTransactionsState.transactions
+        ]
+      })
   };
 
-  // Global compatibility functions
+  // Exact global function names retained.
   window.bbTransactionsGet =
     bbTransactionsGet;
 
@@ -2242,13 +2270,12 @@
   window.bbTransactionsFilter =
     bbTransactionsFilter;
 
-  // ==========================================================================
-  // 19. DOM READY
-  // ==========================================================================
+  // --------------------------------------------------------------------------
+  // 21. Start
+  // --------------------------------------------------------------------------
 
   if (
-    document.readyState ===
-    'loading'
+    document.readyState === 'loading'
   ) {
     document.addEventListener(
       'DOMContentLoaded',
