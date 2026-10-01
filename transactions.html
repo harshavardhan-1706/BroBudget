@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="BroBudget - Income & Expense Management. Add, edit, filter, and track cash flows with category management.">
+  <title>BroBudget | Income & Expense Management</title>
+
+  <!-- Favicon / App Icon -->
+  <link rel="icon" type="image/svg+xml" href="assets/logo/bb-icon.svg">
+
+  <!-- Core Transactions Stylesheet -->
+  <link rel="stylesheet" href="css/transactions.css">
+</head>
+<body>
+
+  <!-- Root Application Container -->
+  <div class="bb-transactions-app-container">
+
+    <!-- ====================================================================
+         1. TOP NAVIGATION HEADER
+         ==================================================================== -->
+    <header class="bb-transactions-header">
+      <a href="transactions.html" class="bb-transactions-brand-link" aria-label="BroBudget Transactions">
+        <div class="bb-transactions-brand-emblem">
+          <span>💵 BB</span>
+        </div>
+        <div class="bb-transactions-brand-meta">
+          <div class="bb-transactions-brand-title">Bro<span>Budget</span></div>
+          <div class="bb-transactions-brand-subtitle">Income &amp; Expense Hub</div>
+        </div>
+      </a>
+
+      <nav class="bb-transactions-header-nav" aria-label="Quick Navigation">
+        <!-- Link to Developer 1's Dashboard -->
+        <a href="../BroBudget-Dashboard/index.html" class="bb-transactions-nav-link" title="Open Main Dashboard">
+          <span>🏠</span>
+          <span>Dashboard</span>
+        </a>
+        <a href="transactions.html" class="bb-transactions-nav-link bb-nav-active" aria-current="page">
+          <span>💸</span>
+          <span>Transactions</span>
+        </a>
+      </nav>
+    </header>
+
+    <!-- ====================================================================
+         2. MAIN CONTENT AREA
+         ==================================================================== -->
+    <main class="bb-transactions-main-content">
+
+      <!-- ================================================================
+           3. MINI OVERVIEW STATS BAR
+           ================================================================ -->
+      <section class="bb-transactions-overview-bar" aria-label="Period Summary Metrics">
+        
+        <!-- Total Inflow -->
+        <article class="bb-transactions-mini-stat bb-mini-inflow">
+          <div class="bb-transactions-mini-icon" aria-hidden="true">💰</div>
+          <div class="bb-transactions-mini-meta">
+            <span class="bb-transactions-mini-label">Total Inflow</span>
+            <span id="bb-mini-inflow-val" class="bb-transactions-mini-value">₹0</span>
+          </div>
+        </article>
+
+        <!-- Total Outflow -->
+        <article class="bb-transactions-mini-stat bb-mini-outflow">
+          <div class="bb-transactions-mini-icon" aria-hidden="true">💸</div>
+          <div class="bb-transactions-mini-meta">
+            <span class="bb-transactions-mini-label">Total Outflow</span>
+            <span id="bb-mini-outflow-val" class="bb-transactions-mini-value">₹0</span>
+          </div>
+        </article>
+
+        <!-- Net Liquid Flow -->
+        <article class="bb-transactions-mini-stat bb-mini-net">
+          <div class="bb-transactions-mini-icon" aria-hidden="true">⚖️</div>
+          <div class="bb-transactions-mini-meta">
+            <span class="bb-transactions-mini-label">Net Filtered Flow</span>
+            <span id="bb-mini-net-val" class="bb-transactions-mini-value">₹0</span>
+          </div>
+        </article>
+
+        <!-- Total Records -->
+        <article class="bb-transactions-mini-stat bb-mini-count">
+          <div class="bb-transactions-mini-icon" aria-hidden="true">📋</div>
+          <div class="bb-transactions-mini-meta">
+            <span class="bb-transactions-mini-label">Transactions</span>
+            <span id="bb-mini-count-val" class="bb-transactions-mini-value">0</span>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- ================================================================
+           4. TWO-COLUMN WORKSPACE: FORM + TABLE
+           ================================================================ -->
+      <div class="bb-transactions-workspace">
+
+        <!-- ==============================================================
+             4A. TRANSACTION ENTRY & EDIT FORM (bb-form-)
+             ============================================================== -->
+        <aside class="bb-form-card" id="bb-form-card" aria-label="Transaction Entry Form">
+          
+          <!-- Mode Switcher (Expense / Income) -->
+          <div class="bb-form-switcher" role="tablist" aria-label="Transaction Type Selection">
+            <button type="button" id="bb-switch-btn-expense" class="bb-form-switcher-btn bb-switch-active-expense" role="tab" aria-selected="true">
+              <span>💸</span>
+              <span>Add Expense</span>
+            </button>
+            <button type="button" id="bb-switch-btn-income" class="bb-form-switcher-btn" role="tab" aria-selected="false">
+              <span>💰</span>
+              <span>Add Income</span>
+            </button>
+          </div>
+
+          <!-- Form Header -->
+          <div class="bb-form-header">
+            <h2 id="bb-form-title-text" class="bb-form-title">Record Expense</h2>
+          </div>
+
+          <!-- Edit Mode Active Notification Banner -->
+          <div id="bb-form-edit-banner" class="bb-form-edit-banner">
+            <span>✏️ Editing selected transaction</span>
+            <span style="font-size:11px; opacity:0.8;">Press Esc to cancel</span>
+          </div>
+
+          <!-- Semantic Transaction Form -->
+          <form id="bb-transaction-form" novalidate>
+
+            <!-- Field 1: Date -->
+            <div class="bb-form-group">
+              <label for="bb-input-date" class="bb-form-label">Transaction Date</label>
+              <input type="date" id="bb-input-date" class="bb-form-input" required>
+              <span id="bb-error-date" class="bb-form-error-msg"></span>
+            </div>
+
+            <!-- Field 2: Category / Source -->
+            <div class="bb-form-group">
+              <label for="bb-input-category" class="bb-form-label">Category / Source</label>
+              <select id="bb-input-category" class="bb-form-select" required>
+                <!-- Populated dynamically based on Expense or Income mode -->
+              </select>
+              <span id="bb-error-category" class="bb-form-error-msg"></span>
+            </div>
+
+            <!-- Field 3: Description -->
+            <div class="bb-form-group">
+              <label for="bb-input-description" class="bb-form-label">Description (Optional)</label>
+              <input type="text" id="bb-input-description" class="bb-form-input" placeholder="e.g. Lunch with team, Groceries, Client fee" maxlength="80">
+              <span id="bb-error-description" class="bb-form-error-msg"></span>
+            </div>
+
+            <!-- Field 4: Amount -->
+            <div class="bb-form-group">
+              <label for="bb-input-amount" class="bb-form-label">Amount (₹)</label>
+              <div class="bb-form-amount-wrapper">
+                <span class="bb-form-currency-badge">₹</span>
+                <input type="number" id="bb-input-amount" class="bb-form-input bb-form-input-amount" placeholder="0" min="1" step="any" required>
+              </div>
+              <span id="bb-error-amount" class="bb-form-error-msg"></span>
+            </div>
+
+            <!-- Form Action Buttons -->
+            <div class="bb-form-actions">
+              <button type="submit" id="bb-form-submit-btn" class="bb-form-submit-btn bb-submit-expense">
+                Add Expense
+              </button>
+              <button type="button" id="bb-form-cancel-btn" class="bb-form-cancel-btn">
+                Cancel Edit
+              </button>
+            </div>
+
+          </form>
+
+        </aside>
+
+        <!-- ==============================================================
+             4B. TRANSACTION LIST, SEARCH & FILTERS (bb-transactions-)
+             ============================================================== -->
+        <section class="bb-transactions-table-section" aria-label="Transaction Ledger">
+          
+          <!-- Filter & Search Controls Hub -->
+          <div class="bb-transactions-controls-card">
+            
+            <div class="bb-transactions-controls-top">
+              <!-- Live Search Box -->
+              <div class="bb-transactions-search-wrapper">
+                <span class="bb-transactions-search-icon" aria-hidden="true">🔍</span>
+                <input type="text" id="bb-search-input" class="bb-transactions-search-input" placeholder="Search by category, note, or date..." aria-label="Search transactions">
+                <span id="bb-search-clear" class="bb-transactions-search-clear" title="Clear search" aria-label="Clear search">&times;</span>
+              </div>
+
+              <!-- Type Filter Tabs -->
+              <div class="bb-filter-type-group" role="tablist" aria-label="Filter by type">
+                <button type="button" class="bb-filter-type-btn bb-filter-type-active" data-type="all">All</button>
+                <button type="button" class="bb-filter-type-btn" data-type="income">Income</button>
+                <button type="button" class="bb-filter-type-btn" data-type="expense">Expense</button>
+              </div>
+            </div>
+
+            <!-- Secondary Filters Row -->
+            <div class="bb-transactions-filters-row">
+              <!-- Category Filter -->
+              <select id="bb-filter-category" class="bb-filter-select" aria-label="Filter by Category">
+                <option value="all">All Categories</option>
+              </select>
+
+              <!-- Month Filter -->
+              <select id="bb-filter-month" class="bb-filter-select" aria-label="Filter by Month">
+                <option value="all">All Months</option>
+              </select>
+
+              <!-- Reset Filters -->
+              <button type="button" id="bb-btn-reset-filters" class="bb-filter-reset-btn">
+                Reset Filters
+              </button>
+            </div>
+
+          </div>
+
+          <!-- Transaction Table Card -->
+          <div class="bb-table-wrapper">
+            
+            <table class="bb-table-transactions" id="bb-transactions-table">
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Category</th>
+                  <th scope="col">Description</th>
+                  <th scope="col">Amount</th>
+                  <th scope="col" style="text-align: right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="bb-table-body">
+                <!-- Rendered dynamically by bbTransactionsRender -->
+              </tbody>
+            </table>
+
+            <!-- Empty State Display -->
+            <div id="bb-table-empty-state" class="bb-table-empty-state" style="display: none;">
+              <div class="bb-table-empty-icon" aria-hidden="true">📑</div>
+              <div class="bb-table-empty-title">No transactions found</div>
+              <div class="bb-table-empty-desc">
+                Try adjusting your search query, clearing active filters, or record a new transaction using the form.
+              </div>
+            </div>
+
+          </div>
+
+        </section>
+
+      </div>
+
+    </main>
+
+    <!-- ====================================================================
+         5. DELETE CONFIRMATION MODAL (bb-modal-)
+         ==================================================================== -->
+    <div id="bb-delete-modal" class="bb-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bb-modal-title">
+      <div class="bb-modal-box">
+        <div class="bb-modal-header">
+          <div class="bb-modal-icon-danger" aria-hidden="true">⚠️</div>
+          <h3 id="bb-modal-title" class="bb-modal-title">Delete Transaction?</h3>
+        </div>
+        <div class="bb-modal-body">
+          <p>Are you sure you want to permanently remove this transaction from BroBudget? This action cannot be undone.</p>
+          <div id="bb-modal-delete-details" class="bb-modal-details">
+            <!-- Populated dynamically with transaction details -->
+          </div>
+        </div>
+        <div class="bb-modal-actions">
+          <button type="button" id="bb-modal-btn-cancel-delete" class="bb-modal-btn-cancel">
+            Cancel
+          </button>
+          <button type="button" id="bb-modal-btn-confirm-delete" class="bb-modal-btn-confirm">
+            Delete Record
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Main JavaScript File -->
+  <script src="js/transactions.js"></script>
+
+</body>
+</html>

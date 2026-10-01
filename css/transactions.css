@@ -1,0 +1,1195 @@
+/* ==========================================================================
+   BroBudget - Income & Expense Management Styles
+   Developer 2 Module
+   Class Prefix: bb-transactions-, bb-form-, bb-table-, bb-
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Design System & Variables
+   -------------------------------------------------------------------------- */
+:root {
+  /* Brand Color Palette */
+  --bb-color-bg-primary: #0a0e17;
+  --bb-color-bg-secondary: #0f172a;
+  --bb-color-bg-surface: rgba(18, 26, 44, 0.75);
+  --bb-color-bg-surface-elevated: rgba(26, 36, 60, 0.85);
+  --bb-color-bg-input: rgba(15, 23, 42, 0.65);
+  --bb-color-border-subtle: rgba(255, 255, 255, 0.08);
+  --bb-color-border-highlight: rgba(255, 255, 255, 0.18);
+
+  /* Financial Accents */
+  --bb-color-income: #10b981;
+  --bb-color-income-light: #34d399;
+  --bb-color-income-dark: #059669;
+  --bb-grad-income: linear-gradient(135deg, rgba(16, 185, 129, 0.25) 0%, rgba(5, 150, 105, 0.1) 100%);
+  --bb-glow-income: 0 8px 24px -6px rgba(16, 185, 129, 0.45);
+
+  --bb-color-expense: #f43f5e;
+  --bb-color-expense-light: #fb7185;
+  --bb-color-expense-dark: #e11d48;
+  --bb-grad-expense: linear-gradient(135deg, rgba(244, 63, 94, 0.25) 0%, rgba(225, 29, 72, 0.1) 100%);
+  --bb-glow-expense: 0 8px 24px -6px rgba(244, 63, 94, 0.45);
+
+  --bb-color-accent-blue: #06b6d4;
+  --bb-color-accent-purple: #8b5cf6;
+
+  /* Neutrals */
+  --bb-text-primary: #f8fafc;
+  --bb-text-secondary: #94a3b8;
+  --bb-text-muted: #64748b;
+  --bb-color-danger: #ef4444;
+
+  /* Typography & Layout */
+  --bb-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --bb-glass-blur: blur(18px);
+  --bb-radius-sm: 10px;
+  --bb-radius-md: 16px;
+  --bb-radius-lg: 22px;
+  --bb-radius-full: 9999px;
+
+  /* Transitions */
+  --bb-transition-fast: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  --bb-transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --bb-transition-smooth: 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--bb-color-bg-primary);
+  color: var(--bb-text-primary);
+  font-family: var(--bb-font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  outline: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--bb-color-income-light);
+  outline-offset: 3px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* --------------------------------------------------------------------------
+   2. Main Container & Ambient Background
+   -------------------------------------------------------------------------- */
+.bb-transactions-app-container {
+  min-height: 100vh;
+  width: 100%;
+  position: relative;
+  background: 
+    radial-gradient(circle at 10% 15%, rgba(16, 185, 129, 0.08) 0%, transparent 40%),
+    radial-gradient(circle at 90% 20%, rgba(244, 63, 94, 0.07) 0%, transparent 40%),
+    radial-gradient(circle at 50% 85%, rgba(6, 182, 212, 0.05) 0%, transparent 50%),
+    var(--bb-color-bg-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+/* --------------------------------------------------------------------------
+   3. Top Navigation Header
+   -------------------------------------------------------------------------- */
+.bb-transactions-header {
+  height: 80px;
+  padding: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(11, 15, 25, 0.75);
+  backdrop-filter: var(--bb-glass-blur);
+  -webkit-backdrop-filter: var(--bb-glass-blur);
+  border-bottom: 1px solid var(--bb-color-border-subtle);
+  position: sticky;
+  top: 0;
+  z-index: 80;
+}
+
+.bb-transactions-brand-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bb-transactions-brand-emblem {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--bb-radius-sm);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.25) 0%, rgba(2, 132, 199, 0.25) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 900;
+  color: #ffffff;
+  transition: transform var(--bb-transition-fast), box-shadow var(--bb-transition-fast);
+}
+
+.bb-transactions-brand-link:hover .bb-transactions-brand-emblem {
+  transform: translateY(-1px) scale(1.03);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+}
+
+.bb-transactions-brand-meta {
+  display: flex;
+  flex-direction: column;
+}
+
+.bb-transactions-brand-title {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: #ffffff;
+}
+
+.bb-transactions-brand-title span {
+  color: var(--bb-color-income-light);
+}
+
+.bb-transactions-brand-subtitle {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.6px;
+  color: var(--bb-text-muted);
+}
+
+/* Header Links */
+.bb-transactions-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bb-transactions-nav-link {
+  padding: 8px 16px;
+  border-radius: var(--bb-radius-full);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--bb-text-secondary);
+  border: 1px solid transparent;
+  transition: all var(--bb-transition-fast);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bb-transactions-nav-link:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--bb-color-border-subtle);
+}
+
+.bb-transactions-nav-link.bb-nav-active {
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.1) 100%);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+/* --------------------------------------------------------------------------
+   4. Content Container & Grid Layout
+   -------------------------------------------------------------------------- */
+.bb-transactions-main-content {
+  flex: 1;
+  padding: 36px 40px 60px 40px;
+  max-width: 1440px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* --------------------------------------------------------------------------
+   5. Overview Summary Bar (Inflow, Outflow, Net, Count)
+   -------------------------------------------------------------------------- */
+.bb-transactions-overview-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.bb-transactions-mini-stat {
+  background: var(--bb-color-bg-surface);
+  backdrop-filter: var(--bb-glass-blur);
+  -webkit-backdrop-filter: var(--bb-glass-blur);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-md);
+  padding: 18px 22px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: transform var(--bb-transition-fast), border-color var(--bb-transition-fast);
+}
+
+.bb-transactions-mini-stat:hover {
+  transform: translateY(-2px);
+  border-color: var(--bb-color-border-highlight);
+}
+
+.bb-transactions-mini-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--bb-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.bb-mini-inflow .bb-transactions-mini-icon {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--bb-color-income-light);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.bb-mini-outflow .bb-transactions-mini-icon {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--bb-color-expense-light);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.bb-mini-net .bb-transactions-mini-icon {
+  background: rgba(6, 182, 212, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(6, 182, 212, 0.3);
+}
+
+.bb-mini-count .bb-transactions-mini-icon {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.bb-transactions-mini-meta {
+  display: flex;
+  flex-direction: column;
+}
+
+.bb-transactions-mini-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--bb-text-muted);
+}
+
+.bb-transactions-mini-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+
+/* --------------------------------------------------------------------------
+   6. Two-Column Workspace Grid (Form + Table)
+   -------------------------------------------------------------------------- */
+.bb-transactions-workspace {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 28px;
+  align-items: start;
+}
+
+/* --------------------------------------------------------------------------
+   7. Transaction Entry Form (bb-form-)
+   -------------------------------------------------------------------------- */
+.bb-form-card {
+  background: var(--bb-color-bg-surface);
+  backdrop-filter: var(--bb-glass-blur);
+  -webkit-backdrop-filter: var(--bb-glass-blur);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-lg);
+  padding: 28px;
+  box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.4);
+  position: sticky;
+  top: 104px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* Form Type Switcher Toggle (Expense / Income) */
+.bb-form-switcher {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-full);
+  padding: 4px;
+  gap: 4px;
+}
+
+.bb-form-switcher-btn {
+  padding: 10px 14px;
+  border-radius: var(--bb-radius-full);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--bb-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-form-switcher-btn:hover {
+  color: #ffffff;
+}
+
+.bb-form-switcher-btn.bb-switch-active-expense {
+  background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 15px rgba(244, 63, 94, 0.35);
+}
+
+.bb-form-switcher-btn.bb-switch-active-income {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
+}
+
+/* Form Header */
+.bb-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bb-form-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Edit Mode Banner */
+.bb-form-edit-banner {
+  display: none;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+  padding: 8px 12px;
+  border-radius: var(--bb-radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bb-form-edit-banner.bb-banner-visible {
+  display: flex;
+}
+
+/* Form Fields */
+.bb-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bb-form-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--bb-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.bb-form-input,
+.bb-form-select {
+  width: 100%;
+  background: var(--bb-color-bg-input);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-sm);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 14.5px;
+  padding: 11px 14px;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-form-input:focus,
+.bb-form-select:focus {
+  border-color: var(--bb-color-income-light);
+  background: rgba(20, 29, 50, 0.9);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.bb-form-input.bb-input-error,
+.bb-form-select.bb-input-error {
+  border-color: var(--bb-color-danger);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.bb-form-error-msg {
+  font-size: 11.5px;
+  color: #f87171;
+  min-height: 16px;
+  display: none;
+}
+
+.bb-form-error-msg.bb-error-visible {
+  display: block;
+}
+
+/* Amount Input with Currency Badge */
+.bb-form-amount-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.bb-form-currency-badge {
+  position: absolute;
+  left: 14px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--bb-text-muted);
+  pointer-events: none;
+}
+
+.bb-form-input-amount {
+  padding-left: 36px;
+  font-weight: 700;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Form Action Buttons */
+.bb-form-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.bb-form-submit-btn {
+  width: 100%;
+  padding: 13px;
+  border-radius: var(--bb-radius-sm);
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-form-submit-btn.bb-submit-expense {
+  background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+  color: #ffffff;
+  box-shadow: var(--bb-glow-expense);
+}
+
+.bb-form-submit-btn.bb-submit-expense:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px -4px rgba(244, 63, 94, 0.6);
+}
+
+.bb-form-submit-btn.bb-submit-income {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  box-shadow: var(--bb-glow-income);
+}
+
+.bb-form-submit-btn.bb-submit-income:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px -4px rgba(16, 185, 129, 0.6);
+}
+
+.bb-form-cancel-btn {
+  display: none;
+  width: 100%;
+  padding: 10px;
+  border-radius: var(--bb-radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--bb-color-border-subtle);
+  color: var(--bb-text-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-form-cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.bb-form-cancel-btn.bb-cancel-visible {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   8. Filter & Search Controls (bb-transactions-filter)
+   -------------------------------------------------------------------------- */
+.bb-transactions-table-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.bb-transactions-controls-card {
+  background: var(--bb-color-bg-surface);
+  backdrop-filter: var(--bb-glass-blur);
+  -webkit-backdrop-filter: var(--bb-glass-blur);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-lg);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bb-transactions-controls-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* Search Box */
+.bb-transactions-search-wrapper {
+  flex: 1;
+  min-width: 260px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.bb-transactions-search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--bb-text-muted);
+  font-size: 15px;
+  pointer-events: none;
+}
+
+.bb-transactions-search-input {
+  width: 100%;
+  padding: 10px 38px 10px 38px;
+  background: var(--bb-color-bg-input);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-full);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 14px;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-transactions-search-input:focus {
+  border-color: var(--bb-color-income-light);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.bb-transactions-search-clear {
+  position: absolute;
+  right: 12px;
+  color: var(--bb-text-muted);
+  font-size: 16px;
+  display: none;
+  cursor: pointer;
+}
+
+.bb-transactions-search-clear.bb-clear-visible {
+  display: block;
+}
+
+/* Filter Dropdowns & Pills */
+.bb-transactions-filters-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Type Filter Tabs */
+.bb-filter-type-group {
+  display: inline-flex;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-full);
+  padding: 3px;
+  gap: 2px;
+}
+
+.bb-filter-type-btn {
+  padding: 6px 14px;
+  border-radius: var(--bb-radius-full);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--bb-text-secondary);
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-filter-type-btn:hover {
+  color: #ffffff;
+}
+
+.bb-filter-type-btn.bb-filter-type-active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.bb-filter-select {
+  background: var(--bb-color-bg-input);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-sm);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-filter-select:hover {
+  border-color: var(--bb-color-border-highlight);
+}
+
+.bb-filter-reset-btn {
+  padding: 7px 14px;
+  border-radius: var(--bb-radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--bb-color-border-subtle);
+  color: var(--bb-text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-filter-reset-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* --------------------------------------------------------------------------
+   9. Transactions Table (bb-table-)
+   -------------------------------------------------------------------------- */
+.bb-table-wrapper {
+  background: var(--bb-color-bg-surface);
+  backdrop-filter: var(--bb-glass-blur);
+  -webkit-backdrop-filter: var(--bb-glass-blur);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-lg);
+  box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+
+.bb-table-transactions {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.bb-table-transactions th {
+  background: rgba(13, 20, 36, 0.9);
+  padding: 16px 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--bb-text-muted);
+  border-bottom: 1px solid var(--bb-color-border-subtle);
+  white-space: nowrap;
+}
+
+.bb-table-transactions td {
+  padding: 16px 20px;
+  font-size: 14px;
+  color: var(--bb-text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: middle;
+  transition: background var(--bb-transition-fast);
+}
+
+.bb-table-transactions tbody tr {
+  transition: background var(--bb-transition-fast), transform var(--bb-transition-fast);
+}
+
+.bb-table-transactions tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Type Badge */
+.bb-table-badge-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--bb-radius-full);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.bb-badge-type-income {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--bb-color-income-light);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.bb-badge-type-expense {
+  background: rgba(244, 63, 94, 0.12);
+  color: var(--bb-color-expense-light);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+/* Category Badge */
+.bb-table-badge-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+/* Amount Styling */
+.bb-table-amount {
+  font-weight: 800;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bb-amount-income {
+  color: var(--bb-color-income-light);
+}
+
+.bb-amount-expense {
+  color: var(--bb-color-expense-light);
+}
+
+/* Action Buttons */
+.bb-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bb-table-btn-action {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--bb-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--bb-color-border-subtle);
+  color: var(--bb-text-secondary);
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-table-btn-edit:hover {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.4);
+  color: #38bdf8;
+  transform: scale(1.05);
+}
+
+.bb-table-btn-delete:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+  transform: scale(1.05);
+}
+
+/* Empty State Graphic */
+.bb-table-empty-state {
+  padding: 60px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.bb-table-empty-icon {
+  font-size: 44px;
+  opacity: 0.8;
+}
+
+.bb-table-empty-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.bb-table-empty-desc {
+  font-size: 13px;
+  color: var(--bb-text-muted);
+  max-width: 340px;
+}
+
+/* --------------------------------------------------------------------------
+   10. Delete Confirmation Modal (bb-modal-)
+   -------------------------------------------------------------------------- */
+.bb-modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  opacity: 0;
+  transition: opacity var(--bb-transition-fast);
+}
+
+.bb-modal-overlay.bb-modal-active {
+  display: flex;
+  opacity: 1;
+}
+
+.bb-modal-box {
+  background: rgba(18, 26, 44, 0.95);
+  border: 1px solid var(--bb-color-border-highlight);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+  border-radius: var(--bb-radius-lg);
+  max-width: 440px;
+  width: 100%;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  transform: scale(0.95);
+  transition: transform var(--bb-transition-normal);
+}
+
+.bb-modal-active .bb-modal-box {
+  transform: scale(1);
+}
+
+.bb-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bb-modal-icon-danger {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--bb-radius-sm);
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.bb-modal-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.bb-modal-body p {
+  font-size: 13.5px;
+  color: var(--bb-text-secondary);
+  line-height: 1.5;
+}
+
+.bb-modal-details {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--bb-color-border-subtle);
+  border-radius: var(--bb-radius-sm);
+  padding: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.bb-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.bb-modal-btn-cancel {
+  padding: 10px 18px;
+  border-radius: var(--bb-radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--bb-color-border-subtle);
+  color: var(--bb-text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-modal-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.bb-modal-btn-confirm {
+  padding: 10px 20px;
+  border-radius: var(--bb-radius-sm);
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: #ffffff;
+  font-size: 13.5px;
+  font-weight: 700;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.35);
+  transition: all var(--bb-transition-fast);
+}
+
+.bb-modal-btn-confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5);
+}
+
+/* --------------------------------------------------------------------------
+   11. Toast Notifications (bb-toast-)
+   -------------------------------------------------------------------------- */
+.bb-toast-container {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.bb-toast-message {
+  pointer-events: auto;
+  min-width: 320px;
+  max-width: 420px;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: var(--bb-glass-blur);
+  -webkit-backdrop-filter: var(--bb-glass-blur);
+  border: 1px solid var(--bb-color-border-highlight);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.5);
+  border-radius: var(--bb-radius-md);
+  padding: 14px 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  transform: translateY(20px);
+  opacity: 0;
+  transition: all var(--bb-transition-normal);
+}
+
+.bb-toast-message.bb-toast-visible {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.bb-toast-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.bb-toast-body {
+  flex: 1;
+}
+
+.bb-toast-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 2px;
+}
+
+.bb-toast-desc {
+  font-size: 12px;
+  color: var(--bb-text-secondary);
+}
+
+.bb-toast-close-btn {
+  color: var(--bb-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  transition: color var(--bb-transition-fast);
+}
+
+.bb-toast-close-btn:hover {
+  color: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   12. Animations & Row Transitions
+   -------------------------------------------------------------------------- */
+@keyframes bbFadeInRow {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bb-row-enter {
+  animation: bbFadeInRow 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes bbDeleteFade {
+  to {
+    opacity: 0;
+    transform: scale(0.96) translateX(20px);
+  }
+}
+
+.bb-row-delete-animate {
+  animation: bbDeleteFade 0.3s forwards;
+}
+
+/* --------------------------------------------------------------------------
+   13. Responsive Breakpoints
+   -------------------------------------------------------------------------- */
+
+/* Medium Devices (Tablets, <= 1024px) */
+@media (max-width: 1024px) {
+  .bb-transactions-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .bb-form-card {
+    position: static;
+  }
+
+  .bb-transactions-overview-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Small Screens (Mobile, <= 768px) */
+@media (max-width: 768px) {
+  .bb-transactions-header {
+    padding: 0 20px;
+  }
+
+  .bb-transactions-main-content {
+    padding: 24px 16px 40px 16px;
+    gap: 24px;
+  }
+
+  .bb-transactions-overview-bar {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .bb-form-card {
+    padding: 20px;
+  }
+
+  .bb-transactions-controls-card {
+    padding: 16px;
+  }
+
+  /* Transform Table to Card-based list on Mobile */
+  .bb-table-wrapper {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+
+  .bb-table-transactions,
+  .bb-table-transactions thead,
+  .bb-table-transactions tbody,
+  .bb-table-transactions th,
+  .bb-table-transactions td,
+  .bb-table-transactions tr {
+    display: block;
+  }
+
+  .bb-table-transactions thead {
+    display: none; /* Hide header on mobile cards */
+  }
+
+  .bb-table-transactions tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .bb-table-transactions tbody tr {
+    background: var(--bb-color-bg-surface);
+    backdrop-filter: var(--bb-glass-blur);
+    -webkit-backdrop-filter: var(--bb-glass-blur);
+    border: 1px solid var(--bb-color-border-subtle);
+    border-radius: var(--bb-radius-md);
+    padding: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .bb-table-transactions td {
+    padding: 6px 0;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .bb-table-transactions td::before {
+    content: attr(data-label);
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--bb-text-muted);
+  }
+
+  .bb-table-actions {
+    margin-top: 8px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .bb-toast-container {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .bb-toast-message {
+    min-width: unset;
+    width: 100%;
+  }
+}
